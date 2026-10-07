@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-"""secretctl MCP server (prototype) — stdio JSON-RPC, zero dependencies.
+﻿#!/usr/bin/env python3
+"""keygrant MCP server (prototype) — stdio JSON-RPC, zero dependencies.
 
 Exposes the DPAPI vault to AI agents WITHOUT ever returning secret values:
   - list_secrets: names, descriptions, usage metadata only
@@ -9,14 +9,14 @@ Exposes the DPAPI vault to AI agents WITHOUT ever returning secret values:
 
 Deliberately absent: any set/get tool. Storing a secret through the model
 would place the value in model context; values enter only out-of-band via
-`secretctl set` (stdin) or a future local UI.
+`keygrant set` (stdin) or a future local UI.
 
 Register in Claude Code (.mcp.json):
   {
     "mcpServers": {
-      "secretctl": {
+      "keygrant": {
         "command": "python",
-        "args": ["<path>/secretctl_mcp.py"]
+        "args": ["<path>/keygrant_mcp.py"]
       }
     }
   }
@@ -30,13 +30,13 @@ import uuid
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from secretctl import (  # noqa: E402
+from keygrant import (  # noqa: E402
     load_vault, save_vault, decrypt_value, request_approval, redact,
 )
 
 # One requester identity per MCP server process = per agent session. Grants
 # approved in this session cannot be reused by other sessions or bare CLI calls.
-os.environ["SECRETCTL_REQUESTER"] = f"mcp:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+os.environ["KEYGRANT_REQUESTER"] = f"mcp:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
 PROTOCOL_VERSION = "2025-06-18"
 
@@ -87,7 +87,7 @@ TOOLS = [
 def tool_list_secrets(_args: dict) -> str:
     vault = load_vault()
     if not vault:
-        return "(vault empty — add secrets out-of-band with: secretctl set NAME)"
+        return "(vault empty — add secrets out-of-band with: keygrant set NAME)"
     lines = []
     for name, meta in sorted(vault.items()):
         lines.append(
@@ -163,7 +163,7 @@ def handle(msg: dict):
             "result": {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "secretctl", "version": "0.1.0"},
+                "serverInfo": {"name": "keygrant", "version": "0.1.0"},
             },
         }
     if method == "tools/list":

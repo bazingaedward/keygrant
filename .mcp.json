@@ -1,8 +1,8 @@
-{
+﻿{
   "mcpServers": {
-    "secretctl": {
+    "keygrant": {
       "command": "python",
-      "args": ["D:/Projects/secretctl/secretctl_mcp.py"]
+      "args": ["D:/Projects/secretctl/keygrant_mcp.py"]
     }
   }
 }

@@ -1,9 +1,9 @@
-[build-system]
+﻿[build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "secretctl"
+name = "keygrant"
 version = "0.1.0"
 description = "Per-command secret injection for AI coding agents — values never enter model context"
 readme = "README.md"
@@ -21,8 +21,8 @@ classifiers = [
 ]
 
 [project.scripts]
-secretctl = "secretctl:main"
-secretctl-mcp = "secretctl_mcp:main"
+keygrant = "keygrant:main"
+keygrant-mcp = "keygrant_mcp:main"
 
 [tool.setuptools]
-py-modules = ["secretctl", "secretctl_mcp"]
+py-modules = ["keygrant", "keygrant_mcp"]

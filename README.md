@@ -1,4 +1,4 @@
-# secretctl
+﻿# keygrant
 
 ![demo: agent requests a secret, user approves via native dialog, output comes back redacted](docs/demo.gif)
 
@@ -13,13 +13,13 @@ context, only the execution environment.
 
 ## Components
 
-- `secretctl.py` — vault + CLI
-  - `secretctl set NAME [--desc TEXT]` — store a secret (value via stdin, never argv)
-  - `secretctl list` / `rm NAME`
-  - `secretctl exec [--redact] NAMES -- CMD` — run CMD with secrets injected
-  - `secretctl revoke NAME|--all` — revoke active approval grants
-  - `secretctl init` — wire up a project (`.mcp.json` + `CLAUDE.md` guidance)
-- `secretctl_mcp.py` — MCP server (stdio JSON-RPC, zero deps)
+- `keygrant.py` — vault + CLI
+  - `keygrant set NAME [--desc TEXT]` — store a secret (value via stdin, never argv)
+  - `keygrant list` / `rm NAME`
+  - `keygrant exec [--redact] NAMES -- CMD` — run CMD with secrets injected
+  - `keygrant revoke NAME|--all` — revoke active approval grants
+  - `keygrant init` — wire up a project (`.mcp.json` + `CLAUDE.md` guidance)
+- `keygrant_mcp.py` — MCP server (stdio JSON-RPC, zero deps)
   - `list_secrets` — names/descriptions/usage only, never values
   - `exec_with_secrets` — server-side exec with injection + forced output redaction
   - deliberately **no** set/store tool: writing a value through the model would
@@ -34,10 +34,10 @@ pip install .        # or: uv tool install .
 Then, in each project where agents should use secrets:
 
 ```bash
-secretctl init
+keygrant init
 ```
 
-`init` adds a `secretctl` entry to the project's `.mcp.json` (merging with any
+`init` adds a `keygrant` entry to the project's `.mcp.json` (merging with any
 existing servers) and appends usage guidance for the model to `CLAUDE.md`,
 both idempotently. Restart Claude Code in that folder to load the server.
 
@@ -72,7 +72,7 @@ both idempotently. Restart Claude Code in that folder to load the server.
 Every use of a secret — via the CLI or the MCP server — requires the user's
 approval through a native, topmost dialog (deny by default on a 60s timeout).
 Approving grants access to that secret for **15 minutes**, bound to the
-requesting session (tracked in `grants.json`); `secretctl revoke` withdraws a
+requesting session (tracked in `grants.json`); `keygrant revoke` withdraws a
 grant early. Both channels go through the same gate, so an agent cannot bypass
 MCP approval by shelling out to the CLI — and a grant approved for one session
 cannot be reused by another. The dialog will be replaced by a resident tray
@@ -81,10 +81,10 @@ app with toast notifications; the grant semantics stay the same.
 ## Storage
 
 - **Windows**: values DPAPI-encrypted (per-user) inside
-  `%APPDATA%\secretctl\vault.json`
+  `%APPDATA%\keygrant\vault.json`
 - **macOS**: values in the login Keychain (via the `security` CLI; the first
   read triggers the OS Keychain permission prompt — an extra OS-level gate);
-  `~/.config/secretctl/vault.json` holds metadata only
+  `~/.config/keygrant/vault.json` holds metadata only
 - **Linux**: values in the Secret Service keyring via `secret-tool`
   (libsecret-tools + a running keyring daemon; approval dialogs need zenity);
   the vault file holds metadata only

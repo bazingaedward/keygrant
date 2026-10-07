@@ -1,22 +1,22 @@
-#!/usr/bin/env python3
-"""secretctl — per-command secret injection for AI coding agents (prototype).
+﻿#!/usr/bin/env python3
+"""keygrant — per-command secret injection for AI coding agents (prototype).
 
 Secrets are stored in an OS-native keystore: DPAPI-encrypted values inside
-%APPDATA%\\secretctl\\vault.json on Windows; the login Keychain on macOS; the
+%APPDATA%\\keygrant\\vault.json on Windows; the login Keychain on macOS; the
 Secret Service keyring via secret-tool on Linux (the vault file then holds
 only metadata). The agent's model context only ever sees
 secret NAMES; values are decrypted at exec time and injected into the child
 process environment only.
 
 Commands:
-  secretctl set NAME [--desc TEXT]        read value from stdin, store encrypted
-  secretctl list                          list secret names + metadata (never values)
-  secretctl rm NAME                       delete a secret
-  secretctl exec [--redact] NAMES -- CMD  run CMD with NAMES (comma-separated)
+  keygrant set NAME [--desc TEXT]        read value from stdin, store encrypted
+  keygrant list                          list secret names + metadata (never values)
+  keygrant rm NAME                       delete a secret
+  keygrant exec [--redact] NAMES -- CMD  run CMD with NAMES (comma-separated)
                                           injected as env vars; --redact captures
                                           output and masks any plaintext leaks
-  secretctl revoke NAME|--all             revoke active approval grants
-  secretctl init                          wire up the current project: .mcp.json
+  keygrant revoke NAME|--all             revoke active approval grants
+  keygrant init                          wire up the current project: .mcp.json
                                           entry + CLAUDE.md guidance for agents
 
 Using a secret requires user approval via a native dialog; approval grants
@@ -44,11 +44,11 @@ else:
     _config_root = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
         os.path.expanduser("~"), ".config")
 
-VAULT_DIR = os.path.join(_config_root, "secretctl")
+VAULT_DIR = os.path.join(_config_root, "keygrant")
 VAULT_PATH = os.path.join(VAULT_DIR, "vault.json")
 GRANTS_PATH = os.path.join(VAULT_DIR, "grants.json")
 GRANT_TTL_SECONDS = 15 * 60
-KEYCHAIN_SERVICE = "secretctl"
+KEYCHAIN_SERVICE = "keygrant"
 
 
 # ---------- keystore backends ----------
@@ -123,7 +123,7 @@ def encrypt_value(value: str) -> dict:
         account = uuid.uuid4().hex
         # value travels via stdin, never argv
         proc = _secret_tool(
-            ["store", f"--label=secretctl: {account}",
+            ["store", f"--label=keygrant: {account}",
              "service", KEYCHAIN_SERVICE, "account", account],
             input=value,
         )
@@ -227,10 +227,10 @@ def redact(text: str, secrets: dict[str, str]) -> str:
 # ---------- approval ----------
 
 def current_requester() -> str:
-    """Identity a grant is bound to. The MCP server sets SECRETCTL_REQUESTER to
+    """Identity a grant is bound to. The MCP server sets KEYGRANT_REQUESTER to
     its per-session id; bare CLI calls fall back to their parent process id, so
     a grant approved for one agent session cannot be reused by another."""
-    return os.environ.get("SECRETCTL_REQUESTER") or f"ppid:{os.getppid()}"
+    return os.environ.get("KEYGRANT_REQUESTER") or f"ppid:{os.getppid()}"
 
 
 def load_grants() -> dict:
@@ -273,7 +273,7 @@ def _approval_dialog_win(text: str, timeout_ms: int) -> bool:
                    wt.UINT, wt.WORD, wt.DWORD]
     fn.restype = ctypes.c_int
     result = fn(
-        None, text, "secretctl — secret access request",
+        None, text, "keygrant — secret access request",
         MB_YESNO | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST,
         0, timeout_ms,
     )
@@ -284,7 +284,7 @@ def _approval_dialog_mac(text: str, timeout_ms: int) -> bool:
     timeout_s = max(1, timeout_ms // 1000)
     body = json.dumps(text, ensure_ascii=False)
     script = (
-        f"display dialog {body} with title \"secretctl\" "
+        f"display dialog {body} with title \"keygrant\" "
         f"buttons {{\"Deny\", \"Allow\"}} default button \"Deny\" "
         f"cancel button \"Deny\" with icon caution giving up after {timeout_s}"
     )
@@ -301,14 +301,14 @@ def _approval_dialog_linux(text: str, timeout_ms: int) -> bool:
     timeout_s = max(1, timeout_ms // 1000)
     try:
         proc = subprocess.run(
-            ["zenity", "--question", "--title=secretctl",
+            ["zenity", "--question", "--title=keygrant",
              f"--text={text}", "--default-cancel",
              f"--timeout={timeout_s}",
              "--ok-label=Allow", "--cancel-label=Deny"],
             capture_output=True, text=True,
         )
     except FileNotFoundError:
-        print("secretctl: zenity not found; denying by default "
+        print("keygrant: zenity not found; denying by default "
               "(install zenity for approval dialogs)", file=sys.stderr)
         return False
     return proc.returncode == 0  # 1 = deny, 5 = timeout
@@ -337,7 +337,7 @@ def request_approval(names: list[str], command: str) -> tuple[bool, str]:
     ]
     if not pending:
         return True, ""
-    timeout_ms = int(os.environ.get("SECRETCTL_APPROVAL_TIMEOUT_MS", "60000"))
+    timeout_ms = int(os.environ.get("KEYGRANT_APPROVAL_TIMEOUT_MS", "60000"))
     if not _approval_dialog(pending, command, timeout_ms):
         return False, (
             f"user denied access to: {', '.join(pending)} "
@@ -355,7 +355,7 @@ def request_approval(names: list[str], command: str) -> tuple[bool, str]:
 
 def cmd_set(args: list[str]) -> int:
     if not args:
-        print("usage: secretctl set NAME [--desc TEXT]", file=sys.stderr)
+        print("usage: keygrant set NAME [--desc TEXT]", file=sys.stderr)
         return 2
     name = args[0]
     desc = ""
@@ -412,7 +412,7 @@ def cmd_exec(args: list[str]) -> int:
         redact_output = True
         args = args[1:]
     if "--" not in args or args.index("--") == 0:
-        print("usage: secretctl exec [--redact] NAME[,NAME...] -- COMMAND [ARGS...]",
+        print("usage: keygrant exec [--redact] NAME[,NAME...] -- COMMAND [ARGS...]",
               file=sys.stderr)
         return 2
     sep = args.index("--")
@@ -463,7 +463,7 @@ def cmd_exec(args: list[str]) -> int:
 
 def cmd_revoke(args: list[str]) -> int:
     if not args:
-        print("usage: secretctl revoke NAME | --all", file=sys.stderr)
+        print("usage: keygrant revoke NAME | --all", file=sys.stderr)
         return 2
     if args[0] == "--all":
         save_grants({})
@@ -479,12 +479,12 @@ def cmd_revoke(args: list[str]) -> int:
     return 0
 
 
-CLAUDE_MD_MARKER = "<!-- secretctl-guidance -->"
+CLAUDE_MD_MARKER = "<!-- keygrant-guidance -->"
 CLAUDE_MD_SNIPPET = f"""
 {CLAUDE_MD_MARKER}
-## Secrets (secretctl)
+## Secrets (keygrant)
 
-API keys and other secrets are managed by secretctl and must NEVER appear in
+API keys and other secrets are managed by keygrant and must NEVER appear in
 this conversation. Rules:
 
 - Never ask the user to paste a secret value; never echo, log, or hardcode one.
@@ -508,11 +508,11 @@ def cmd_init(_args: list[str]) -> int:
         except json.JSONDecodeError:
             print(f"error: {mcp_path} exists but is not valid JSON", file=sys.stderr)
             return 1
-    config.setdefault("mcpServers", {})["secretctl"] = {"command": "secretctl-mcp"}
+    config.setdefault("mcpServers", {})["keygrant"] = {"command": "keygrant-mcp"}
     with open(mcp_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
         f.write("\n")
-    print(f"wrote: {mcp_path} (server: secretctl-mcp)")
+    print(f"wrote: {mcp_path} (server: keygrant-mcp)")
 
     # CLAUDE.md: append guidance once
     claude_md = os.path.join(os.getcwd(), "CLAUDE.md")
@@ -521,7 +521,7 @@ def cmd_init(_args: list[str]) -> int:
         with open(claude_md, "r", encoding="utf-8") as f:
             existing = f.read()
     if CLAUDE_MD_MARKER in existing:
-        print(f"ok: {claude_md} already has secretctl guidance")
+        print(f"ok: {claude_md} already has keygrant guidance")
     else:
         with open(claude_md, "a", encoding="utf-8") as f:
             if existing and not existing.endswith("\n"):
@@ -530,7 +530,7 @@ def cmd_init(_args: list[str]) -> int:
         print(f"updated: {claude_md}")
 
     print("\nnext steps:")
-    print("  1. add a secret:   secretctl set MY_KEY --desc \"what it is\"")
+    print("  1. add a secret:   keygrant set MY_KEY --desc \"what it is\"")
     print("  2. restart Claude Code in this folder to load the MCP server")
     return 0
 
