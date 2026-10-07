@@ -1,5 +1,7 @@
 # secretctl
 
+![demo: agent requests a secret, user approves via native dialog, output comes back redacted](docs/demo.gif)
+
 Per-command secret injection for AI coding agents. Secrets live in a local
 DPAPI-encrypted vault; the model's context only ever sees secret **names** —
 values are injected into the child process environment at exec time, and all
