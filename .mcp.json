@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "secretctl": {
+      "command": "python",
+      "args": ["D:/Projects/secretctl/secretctl_mcp.py"]
+    }
+  }
+}
