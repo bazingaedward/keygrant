@@ -3,3 +3,6 @@ __pycache__/
 .venv/
 vault.json
 *.local.json
+build/
+egg-info/
+*.egg-info/

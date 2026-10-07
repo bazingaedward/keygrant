@@ -1,9 +1,0 @@
-README.md
-pyproject.toml
-secretctl.py
-secretctl_mcp.py
-secretctl.egg-info/PKG-INFO
-secretctl.egg-info/SOURCES.txt
-secretctl.egg-info/dependency_links.txt
-secretctl.egg-info/entry_points.txt
-secretctl.egg-info/top_level.txt
