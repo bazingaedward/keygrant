@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secretctl"
+version = "0.1.0"
+description = "Per-command secret injection for AI coding agents — values never enter model context"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+keywords = ["secrets", "mcp", "ai-agents", "claude-code", "security"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+
+[project.scripts]
+secretctl = "secretctl:main"
+secretctl-mcp = "secretctl_mcp:main"
+
+[tool.setuptools]
+py-modules = ["secretctl", "secretctl_mcp"]

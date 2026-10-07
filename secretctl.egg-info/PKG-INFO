@@ -1,3 +1,19 @@
+Metadata-Version: 2.4
+Name: secretctl
+Version: 0.1.0
+Summary: Per-command secret injection for AI coding agents — values never enter model context
+License: Apache-2.0
+Keywords: secrets,mcp,ai-agents,claude-code,security
+Classifier: Development Status :: 3 - Alpha
+Classifier: Environment :: Console
+Classifier: Intended Audience :: Developers
+Classifier: Operating System :: Microsoft :: Windows
+Classifier: Operating System :: MacOS
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Security
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+
 # secretctl
 
 Per-command secret injection for AI coding agents. Secrets live in a local
@@ -16,28 +32,26 @@ context, only the execution environment.
   - `secretctl list` / `rm NAME`
   - `secretctl exec [--redact] NAMES -- CMD` — run CMD with secrets injected
   - `secretctl revoke NAME|--all` — revoke active approval grants
-  - `secretctl init` — wire up a project (`.mcp.json` + `CLAUDE.md` guidance)
 - `secretctl_mcp.py` — MCP server (stdio JSON-RPC, zero deps)
   - `list_secrets` — names/descriptions/usage only, never values
   - `exec_with_secrets` — server-side exec with injection + forced output redaction
   - deliberately **no** set/store tool: writing a value through the model would
     put it in context; values enter out-of-band via the CLI only
 
-## Install
+## Claude Code setup
 
-```bash
-pip install .        # or: uv tool install .
+`.mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "secretctl": {
+      "command": "python",
+      "args": ["D:/Projects/secretctl/secretctl_mcp.py"]
+    }
+  }
+}
 ```
-
-Then, in each project where agents should use secrets:
-
-```bash
-secretctl init
-```
-
-`init` adds a `secretctl` entry to the project's `.mcp.json` (merging with any
-existing servers) and appends usage guidance for the model to `CLAUDE.md`,
-both idempotently. Restart Claude Code in that folder to load the server.
 
 ## Threat model
 
@@ -78,18 +92,14 @@ app with toast notifications; the grant semantics stay the same.
 
 ## Storage
 
-- **Windows**: values DPAPI-encrypted (per-user) inside
-  `%APPDATA%\secretctl\vault.json`
-- **macOS**: values in the login Keychain (via the `security` CLI; the first
-  read triggers the OS Keychain permission prompt — an extra OS-level gate);
-  `~/.config/secretctl/vault.json` holds metadata only
-
-The vault file also records usage metadata (use count, last used) as the seed
-of an audit trail. Linux (libsecret) is on the roadmap.
+`%APPDATA%\secretctl\vault.json` — values encrypted with Windows DPAPI
+(per-user), plus usage metadata (use count, last used) as the seed of an
+audit trail. Prototype is Windows-only; macOS Keychain / libsecret are next.
 
 ## Roadmap (prototype → product)
 
-1. Linux libsecret backend
-2. Resident tray app (replaces the modal dialog; approval history, revoke UI)
-3. Per-secret egress allowlists (bind a key to permitted destination hosts)
-4. Optional cloud sync for teams (zero-knowledge: server stores ciphertext only)
+1. macOS Keychain / Linux libsecret backends
+2. Packaging (`pip install` / uv tool) and `secretctl init` setup command
+3. Resident tray app (replaces the modal dialog; approval history, revoke UI)
+4. Per-secret egress allowlists (bind a key to permitted destination hosts)
+5. Optional cloud sync for teams (zero-knowledge: server stores ciphertext only)

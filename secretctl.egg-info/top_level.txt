@@ -1,0 +1,2 @@
+secretctl
+secretctl_mcp

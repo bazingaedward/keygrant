@@ -1,0 +1,3 @@
+[console_scripts]
+secretctl = secretctl:main
+secretctl-mcp = secretctl_mcp:main
