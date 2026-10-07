@@ -83,13 +83,15 @@ app with toast notifications; the grant semantics stay the same.
 - **macOS**: values in the login Keychain (via the `security` CLI; the first
   read triggers the OS Keychain permission prompt — an extra OS-level gate);
   `~/.config/secretctl/vault.json` holds metadata only
+- **Linux**: values in the Secret Service keyring via `secret-tool`
+  (libsecret-tools + a running keyring daemon; approval dialogs need zenity);
+  the vault file holds metadata only
 
 The vault file also records usage metadata (use count, last used) as the seed
-of an audit trail. Linux (libsecret) is on the roadmap.
+of an audit trail.
 
 ## Roadmap (prototype → product)
 
-1. Linux libsecret backend
-2. Resident tray app (replaces the modal dialog; approval history, revoke UI)
-3. Per-secret egress allowlists (bind a key to permitted destination hosts)
-4. Optional cloud sync for teams (zero-knowledge: server stores ciphertext only)
+1. Resident tray app (replaces the modal dialog; approval history, revoke UI)
+2. Per-secret egress allowlists (bind a key to permitted destination hosts)
+3. Optional cloud sync for teams (zero-knowledge: server stores ciphertext only)

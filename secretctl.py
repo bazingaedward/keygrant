@@ -2,8 +2,9 @@
 """secretctl — per-command secret injection for AI coding agents (prototype).
 
 Secrets are stored in an OS-native keystore: DPAPI-encrypted values inside
-%APPDATA%\\secretctl\\vault.json on Windows; the login Keychain on macOS (the
-vault file then holds only metadata). The agent's model context only ever sees
+%APPDATA%\\secretctl\\vault.json on Windows; the login Keychain on macOS; the
+Secret Service keyring via secret-tool on Linux (the vault file then holds
+only metadata). The agent's model context only ever sees
 secret NAMES; values are decrypted at exec time and injected into the child
 process environment only.
 
@@ -35,11 +36,13 @@ from datetime import datetime, timezone
 
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
 
 if IS_WIN:
     _config_root = os.environ["APPDATA"]
 else:
-    _config_root = os.path.join(os.path.expanduser("~"), ".config")
+    _config_root = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+        os.path.expanduser("~"), ".config")
 
 VAULT_DIR = os.path.join(_config_root, "secretctl")
 VAULT_PATH = os.path.join(VAULT_DIR, "vault.json")
@@ -92,6 +95,17 @@ def _keychain(command: str) -> subprocess.CompletedProcess:
     )
 
 
+def _secret_tool(args: list[str], **kwargs) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(["secret-tool", *args],
+                              capture_output=True, text=True, **kwargs)
+    except FileNotFoundError:
+        raise OSError(
+            "secret-tool not found — install libsecret-tools (Debian/Ubuntu) "
+            "or libsecret (Fedora/Arch), and ensure a keyring daemon is running"
+        ) from None
+
+
 def encrypt_value(value: str) -> dict:
     """Store a value in the platform keystore; return vault record fields."""
     if IS_WIN:
@@ -105,6 +119,17 @@ def encrypt_value(value: str) -> dict:
         if proc.returncode != 0:
             raise OSError(f"keychain add failed: {proc.stderr.strip()}")
         return {"keychain": account}
+    if IS_LINUX:
+        account = uuid.uuid4().hex
+        # value travels via stdin, never argv
+        proc = _secret_tool(
+            ["store", f"--label=secretctl: {account}",
+             "service", KEYCHAIN_SERVICE, "account", account],
+            input=value,
+        )
+        if proc.returncode != 0:
+            raise OSError(f"secret-tool store failed: {proc.stderr.strip()}")
+        return {"secret_tool": account}
     raise OSError(f"unsupported platform: {sys.platform}")
 
 
@@ -122,6 +147,14 @@ def decrypt_value(record: dict) -> str:
         if proc.returncode != 0:
             raise OSError(f"keychain read failed: {proc.stderr.strip()}")
         return proc.stdout.rstrip("\n")
+    if "secret_tool" in record:
+        proc = _secret_tool(
+            ["lookup", "service", KEYCHAIN_SERVICE,
+             "account", record["secret_tool"]],
+        )
+        if proc.returncode != 0:
+            raise OSError(f"secret-tool lookup failed: {proc.stderr.strip()}")
+        return proc.stdout.rstrip("\n")
     raise OSError("unknown vault record format")
 
 
@@ -132,6 +165,9 @@ def delete_value(record: dict) -> None:
              "-a", record["keychain"]],
             capture_output=True, text=True,
         )
+    elif "secret_tool" in record:
+        _secret_tool(["clear", "service", KEYCHAIN_SERVICE,
+                      "account", record["secret_tool"]])
 
 
 # ---------- vault ----------
@@ -253,6 +289,23 @@ def _approval_dialog_mac(text: str, timeout_ms: int) -> bool:
     )
 
 
+def _approval_dialog_linux(text: str, timeout_ms: int) -> bool:
+    timeout_s = max(1, timeout_ms // 1000)
+    try:
+        proc = subprocess.run(
+            ["zenity", "--question", "--title=secretctl",
+             f"--text={text}", "--default-cancel",
+             f"--timeout={timeout_s}",
+             "--ok-label=Allow", "--cancel-label=Deny"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        print("secretctl: zenity not found; denying by default "
+              "(install zenity for approval dialogs)", file=sys.stderr)
+        return False
+    return proc.returncode == 0  # 1 = deny, 5 = timeout
+
+
 def _approval_dialog(names: list[str], command: str, timeout_ms: int) -> bool:
     """Native, topmost yes/no dialog. Timeout or No = deny."""
     text = _dialog_text(names, command)
@@ -260,6 +313,8 @@ def _approval_dialog(names: list[str], command: str, timeout_ms: int) -> bool:
         return _approval_dialog_win(text, timeout_ms)
     if IS_MAC:
         return _approval_dialog_mac(text, timeout_ms)
+    if IS_LINUX:
+        return _approval_dialog_linux(text, timeout_ms)
     return False  # no interactive channel on this platform: deny by default
 
 
@@ -482,7 +537,11 @@ def main() -> int:
     if cmd not in handlers:
         print(f"error: unknown command: {cmd}", file=sys.stderr)
         return 2
-    return handlers[cmd](args)
+    try:
+        return handlers[cmd](args)
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
