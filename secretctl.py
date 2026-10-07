@@ -172,18 +172,26 @@ def delete_value(record: dict) -> None:
 
 # ---------- vault ----------
 
+VAULT_FORMAT_VERSION = 1
+
+
 def load_vault() -> dict:
+    """Return the name -> record mapping. Accepts the pre-versioning flat
+    format and migrates it transparently on the next save."""
     if not os.path.exists(VAULT_PATH):
         return {}
     with open(VAULT_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    if isinstance(data.get("version"), int):
+        return data.get("secrets", {})
+    return data  # legacy flat format
 
 
 def save_vault(vault: dict) -> None:
     os.makedirs(VAULT_DIR, exist_ok=True)
     tmp = VAULT_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(vault, f, indent=2)
+        json.dump({"version": VAULT_FORMAT_VERSION, "secrets": vault}, f, indent=2)
     os.replace(tmp, VAULT_PATH)
 
 
