@@ -30,7 +30,7 @@ import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from secretctl import load_vault, save_vault, unprotect  # noqa: E402
+from secretctl import load_vault, save_vault, unprotect, request_approval  # noqa: E402
 
 PROTOCOL_VERSION = "2025-06-18"
 
@@ -49,9 +49,11 @@ TOOLS = [
         "description": (
             "Run a shell command with the named secrets injected as environment "
             "variables (reference them as %NAME% / $env:NAME / $NAME inside the "
-            "command). Output is returned with any plaintext secret values "
-            "redacted. This is the ONLY way to use a secret; values never "
-            "appear in conversation context."
+            "command). The user must approve access via a native dialog (grants "
+            "last 15 minutes); a denial is final — never retry it. Output is "
+            "returned with any plaintext secret values redacted. This is the "
+            "ONLY way to use a secret; values never appear in conversation "
+            "context."
         ),
         "inputSchema": {
             "type": "object",
@@ -94,10 +96,19 @@ def tool_exec_with_secrets(args: dict) -> str:
     names = args["secrets"]
     vault = load_vault()
 
-    secrets: dict[str, str] = {}
     for name in names:
         if name not in vault:
             return f"error: no such secret: {name} (use list_secrets)"
+
+    allowed, reason = request_approval(names, command)
+    if not allowed:
+        return (
+            f"denied: {reason}. Do not retry automatically; "
+            "ask the user whether they want to grant access."
+        )
+
+    secrets: dict[str, str] = {}
+    for name in names:
         secrets[name] = unprotect(base64.b64decode(vault[name]["blob"])).decode()
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")

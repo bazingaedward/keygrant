@@ -15,6 +15,7 @@ context, only the execution environment.
   - `secretctl set NAME [--desc TEXT]` — store a secret (value via stdin, never argv)
   - `secretctl list` / `rm NAME`
   - `secretctl exec [--redact] NAMES -- CMD` — run CMD with secrets injected
+  - `secretctl revoke NAME|--all` — revoke active approval grants
 - `secretctl_mcp.py` — MCP server (stdio JSON-RPC, zero deps)
   - `list_secrets` — names/descriptions/usage only, never values
   - `exec_with_secrets` — server-side exec with injection + forced output redaction
@@ -36,6 +37,16 @@ context, only the execution environment.
 }
 ```
 
+## Approval
+
+Every use of a secret — via the CLI or the MCP server — requires the user's
+approval through a native, topmost dialog (deny by default on a 60s timeout).
+Approving grants access to that secret for **15 minutes**, tracked in
+`grants.json`; `secretctl revoke` withdraws a grant early. Both channels share
+the same grant store, so an agent cannot bypass MCP approval by shelling out
+to the CLI. The dialog will be replaced by a resident tray app with toast
+notifications; the grant semantics stay the same.
+
 ## Storage
 
 `%APPDATA%\secretctl\vault.json` — values encrypted with Windows DPAPI
@@ -44,8 +55,9 @@ audit trail. Prototype is Windows-only; macOS Keychain / libsecret are next.
 
 ## Roadmap (prototype → product)
 
-1. Tray app with native approval notifications (per-session, per-key grants)
-2. Session-scoped short-lived grants
+1. Resident tray app (replaces the modal dialog; approval history, revoke UI)
+2. Per-requester grants (today a grant is per-secret: any process may use it
+   during the TTL window)
 3. macOS/Linux keystores
 4. Harden exec surface (shell injection) and redaction (encoding variants)
 5. Open-source release; later: zero-knowledge cloud control plane (team

@@ -12,6 +12,10 @@ Commands:
   secretctl exec [--redact] NAMES -- CMD  run CMD with NAMES (comma-separated)
                                           injected as env vars; --redact captures
                                           output and masks any plaintext leaks
+  secretctl revoke NAME|--all             revoke active approval grants
+
+Using a secret requires user approval via a native dialog; approval grants
+access for 15 minutes (stored in grants.json). Timeout = deny.
 """
 
 import base64
@@ -21,10 +25,13 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 VAULT_DIR = os.path.join(os.environ["APPDATA"], "secretctl")
 VAULT_PATH = os.path.join(VAULT_DIR, "vault.json")
+GRANTS_PATH = os.path.join(VAULT_DIR, "grants.json")
+GRANT_TTL_SECONDS = 15 * 60
 
 
 # ---------- DPAPI ----------
@@ -73,6 +80,70 @@ def save_vault(vault: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(vault, f, indent=2)
     os.replace(tmp, VAULT_PATH)
+
+
+# ---------- approval ----------
+
+def load_grants() -> dict:
+    try:
+        with open(GRANTS_PATH, "r", encoding="utf-8") as f:
+            grants = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    now = time.time()
+    return {name: exp for name, exp in grants.items() if exp > now}
+
+
+def save_grants(grants: dict) -> None:
+    os.makedirs(VAULT_DIR, exist_ok=True)
+    tmp = GRANTS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(grants, f, indent=2)
+    os.replace(tmp, GRANTS_PATH)
+
+
+def _approval_dialog(names: list[str], command: str, timeout_ms: int) -> bool:
+    """Native, topmost yes/no dialog. Timeout or No = deny."""
+    preview = command if len(command) <= 200 else command[:200] + "…"
+    text = (
+        "An AI agent requests access to secret(s):\n\n"
+        + "\n".join(f"    {n}" for n in names)
+        + f"\n\nCommand:\n    {preview}\n\n"
+        + f"Allow for {GRANT_TTL_SECONDS // 60} minutes?"
+    )
+    MB_YESNO, MB_ICONWARNING = 0x4, 0x30
+    MB_SYSTEMMODAL, MB_SETFOREGROUND, MB_TOPMOST = 0x1000, 0x10000, 0x40000
+    IDYES = 6
+    fn = ctypes.windll.user32.MessageBoxTimeoutW
+    fn.argtypes = [wt.HWND, ctypes.c_wchar_p, ctypes.c_wchar_p,
+                   wt.UINT, wt.WORD, wt.DWORD]
+    fn.restype = ctypes.c_int
+    result = fn(
+        None, text, "secretctl — secret access request",
+        MB_YESNO | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST,
+        0, timeout_ms,
+    )
+    return result == IDYES
+
+
+def request_approval(names: list[str], command: str) -> tuple[bool, str]:
+    """Return (allowed, denial_reason). Prompts only for ungranted names."""
+    grants = load_grants()
+    pending = [n for n in names if n not in grants]
+    if not pending:
+        return True, ""
+    timeout_ms = int(os.environ.get("SECRETCTL_APPROVAL_TIMEOUT_MS", "60000"))
+    if not _approval_dialog(pending, command, timeout_ms):
+        return False, (
+            f"user denied access to: {', '.join(pending)} "
+            "(approval dialog declined or timed out)"
+        )
+    grants = load_grants()
+    expiry = time.time() + GRANT_TTL_SECONDS
+    for name in pending:
+        grants[name] = expiry
+    save_grants(grants)
+    return True, ""
 
 
 # ---------- commands ----------
@@ -143,11 +214,18 @@ def cmd_exec(args: list[str]) -> int:
         return 2
 
     vault = load_vault()
-    secrets: dict[str, str] = {}
     for name in names:
         if name not in vault:
             print(f"error: no such secret: {name}", file=sys.stderr)
             return 1
+
+    allowed, reason = request_approval(names, subprocess.list2cmdline(command))
+    if not allowed:
+        print(f"denied: {reason}", file=sys.stderr)
+        return 3
+
+    secrets: dict[str, str] = {}
+    for name in names:
         secrets[name] = unprotect(base64.b64decode(vault[name]["blob"])).decode()
 
     # audit trail: usage metadata, never values
@@ -177,12 +255,31 @@ def cmd_exec(args: list[str]) -> int:
     return proc.returncode
 
 
+def cmd_revoke(args: list[str]) -> int:
+    if not args:
+        print("usage: secretctl revoke NAME | --all", file=sys.stderr)
+        return 2
+    if args[0] == "--all":
+        save_grants({})
+        print("revoked: all grants")
+        return 0
+    grants = load_grants()
+    if args[0] not in grants:
+        print(f"no active grant for: {args[0]}")
+        return 0
+    del grants[args[0]]
+    save_grants(grants)
+    print(f"revoked: {args[0]}")
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__.strip(), file=sys.stderr)
         return 2
     cmd, args = sys.argv[1], sys.argv[2:]
-    handlers = {"set": cmd_set, "list": cmd_list, "rm": cmd_rm, "exec": cmd_exec}
+    handlers = {"set": cmd_set, "list": cmd_list, "rm": cmd_rm,
+                "exec": cmd_exec, "revoke": cmd_revoke}
     if cmd not in handlers:
         print(f"error: unknown command: {cmd}", file=sys.stderr)
         return 2
