@@ -27,10 +27,17 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from secretctl import load_vault, save_vault, unprotect, request_approval  # noqa: E402
+from secretctl import (  # noqa: E402
+    load_vault, save_vault, unprotect, request_approval, redact,
+)
+
+# One requester identity per MCP server process = per agent session. Grants
+# approved in this session cannot be reused by other sessions or bare CLI calls.
+os.environ["SECRETCTL_REQUESTER"] = f"mcp:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
 PROTOCOL_VERSION = "2025-06-18"
 
@@ -129,12 +136,8 @@ def tool_exec_with_secrets(args: dict) -> str:
         timeout=120,
     )
 
-    out = proc.stdout or ""
-    err = proc.stderr or ""
-    for name, value in secrets.items():
-        if value:
-            out = out.replace(value, f"[{name}:REDACTED]")
-            err = err.replace(value, f"[{name}:REDACTED]")
+    out = redact(proc.stdout or "", secrets)
+    err = redact(proc.stderr or "", secrets)
 
     parts = [f"exit code: {proc.returncode}"]
     if out.strip():

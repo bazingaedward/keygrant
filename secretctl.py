@@ -26,6 +26,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.parse
 from datetime import datetime, timezone
 
 VAULT_DIR = os.path.join(os.environ["APPDATA"], "secretctl")
@@ -82,7 +83,42 @@ def save_vault(vault: dict) -> None:
     os.replace(tmp, VAULT_PATH)
 
 
+# ---------- redaction ----------
+
+def _variants(name: str, value: str) -> list[tuple[str, str]]:
+    """Encodings of a secret value an agent might emit to evade plain matching."""
+    b64 = base64.b64encode(value.encode()).decode()
+    variants = [
+        (value, name),
+        (b64, f"{name}:base64"),
+        (b64.rstrip("="), f"{name}:base64"),
+        (value.encode().hex(), f"{name}:hex"),
+        (value.encode().hex().upper(), f"{name}:hex"),
+        (urllib.parse.quote(value, safe=""), f"{name}:urlencoded"),
+    ]
+    seen: set[str] = set()
+    out = []
+    for v, label in variants:
+        if v and v not in seen:
+            seen.add(v)
+            out.append((v, label))
+    return out
+
+
+def redact(text: str, secrets: dict[str, str]) -> str:
+    for name, value in secrets.items():
+        for variant, label in _variants(name, value):
+            text = text.replace(variant, f"[{label}:REDACTED]")
+    return text
+
+
 # ---------- approval ----------
+
+def current_requester() -> str:
+    """Identity a grant is bound to. The MCP server sets SECRETCTL_REQUESTER to
+    its per-session id; bare CLI calls fall back to their parent process id, so
+    a grant approved for one agent session cannot be reused by another."""
+    return os.environ.get("SECRETCTL_REQUESTER") or f"ppid:{os.getppid()}"
 
 def load_grants() -> dict:
     try:
@@ -91,7 +127,10 @@ def load_grants() -> dict:
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
     now = time.time()
-    return {name: exp for name, exp in grants.items() if exp > now}
+    return {
+        name: g for name, g in grants.items()
+        if isinstance(g, dict) and g.get("exp", 0) > now
+    }
 
 
 def save_grants(grants: dict) -> None:
@@ -127,9 +166,14 @@ def _approval_dialog(names: list[str], command: str, timeout_ms: int) -> bool:
 
 
 def request_approval(names: list[str], command: str) -> tuple[bool, str]:
-    """Return (allowed, denial_reason). Prompts only for ungranted names."""
+    """Return (allowed, denial_reason). Prompts for names not granted to the
+    current requester; grants made for other requesters do not carry over."""
+    requester = current_requester()
     grants = load_grants()
-    pending = [n for n in names if n not in grants]
+    pending = [
+        n for n in names
+        if not (n in grants and grants[n].get("req") == requester)
+    ]
     if not pending:
         return True, ""
     timeout_ms = int(os.environ.get("SECRETCTL_APPROVAL_TIMEOUT_MS", "60000"))
@@ -141,7 +185,7 @@ def request_approval(names: list[str], command: str) -> tuple[bool, str]:
     grants = load_grants()
     expiry = time.time() + GRANT_TTL_SECONDS
     for name in pending:
-        grants[name] = expiry
+        grants[name] = {"exp": expiry, "req": requester}
     save_grants(grants)
     return True, ""
 
@@ -198,9 +242,9 @@ def cmd_rm(args: list[str]) -> int:
 
 
 def cmd_exec(args: list[str]) -> int:
-    redact = False
+    redact_output = False
     if args and args[0] == "--redact":
-        redact = True
+        redact_output = True
         args = args[1:]
     if "--" not in args or args.index("--") == 0:
         print("usage: secretctl exec [--redact] NAME[,NAME...] -- COMMAND [ARGS...]",
@@ -238,16 +282,13 @@ def cmd_exec(args: list[str]) -> int:
     env = os.environ.copy()
     env.update(secrets)
 
-    if not redact:
+    if not redact_output:
         proc = subprocess.run(command, env=env)
         return proc.returncode
 
     proc = subprocess.run(command, env=env, capture_output=True, text=True)
-    out, err = proc.stdout, proc.stderr
-    for name, value in secrets.items():
-        if value:
-            out = out.replace(value, f"[{name}:REDACTED]")
-            err = err.replace(value, f"[{name}:REDACTED]")
+    out = redact(proc.stdout, secrets)
+    err = redact(proc.stderr, secrets)
     if out:
         sys.stdout.write(out)
     if err:
