@@ -26,17 +26,16 @@ import json
 import os
 import subprocess
 import sys
-import uuid
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from keygrant import (  # noqa: E402
-    load_vault, save_vault, decrypt_value, request_approval, redact,
+    GrantStore, load_vault, save_vault, decrypt_value, request_approval, redact,
 )
 
-# One requester identity per MCP server process = per agent session. Grants
-# approved in this session cannot be reused by other sessions or bare CLI calls.
-os.environ["KEYGRANT_REQUESTER"] = f"mcp:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+# One MCP server process = one agent session. Its grants live only here, in
+# memory, so other sessions, bare CLI calls and files on disk cannot reuse them.
+GRANTS = GrantStore()
 
 PROTOCOL_VERSION = "2025-06-18"
 
@@ -55,8 +54,11 @@ TOOLS = [
         "description": (
             "Run a shell command with the named secrets injected as environment "
             "variables (reference them as %NAME% / $env:NAME / $NAME inside the "
-            "command). The user must approve access via a native dialog (grants "
-            "last 15 minutes); a denial is final — never retry it. Output is "
+            "command). The user must approve access via a native dialog that "
+            "shows the full command; approval covers that exact command string "
+            "for 15 minutes, so reuse the identical command for retries. "
+            "Commands over 2000 characters are refused: put long logic in a "
+            "script. A denial is final — never retry it. Output is "
             "returned with any plaintext secret values redacted. This is the "
             "ONLY way to use a secret; values never appear in conversation "
             "context."
@@ -106,7 +108,7 @@ def tool_exec_with_secrets(args: dict) -> str:
         if name not in vault:
             return f"error: no such secret: {name} (use list_secrets)"
 
-    allowed, reason = request_approval(names, command)
+    allowed, reason = request_approval(names, command, GRANTS)
     if not allowed:
         return (
             f"denied: {reason}. Do not retry automatically; "

@@ -15,15 +15,16 @@ Commands:
   keygrant exec [--redact] NAMES -- CMD  run CMD with NAMES (comma-separated)
                                           injected as env vars; --redact captures
                                           output and masks any plaintext leaks
-  keygrant revoke NAME|--all             revoke active approval grants
+  keygrant revoke NAME|--all             void approval grants in every session
   keygrant init                          wire up the current project: .mcp.json
                                           entry + CLAUDE.md guidance for agents
   keygrant mcp                           run the MCP server on stdio (same as
                                           keygrant-mcp)
 
-Using a secret requires user approval via a native dialog; approval grants
-access for 15 minutes (stored in grants.json, bound to the requesting
-session). Timeout = deny.
+Using a secret requires user approval via a native dialog showing the full
+command. Through the MCP server, approval covers that exact command for 15
+minutes, held in the server's memory only; the CLI prompts on every exec.
+Timeout = deny.
 """
 
 import base64
@@ -48,8 +49,9 @@ else:
 
 VAULT_DIR = os.path.join(_config_root, "keygrant")
 VAULT_PATH = os.path.join(VAULT_DIR, "vault.json")
-GRANTS_PATH = os.path.join(VAULT_DIR, "grants.json")
+REVOCATIONS_PATH = os.path.join(VAULT_DIR, "revocations.json")
 GRANT_TTL_SECONDS = 15 * 60
+MAX_COMMAND_CHARS = 2000  # longer commands can't be reviewed in a dialog
 KEYCHAIN_SERVICE = "keygrant"
 
 
@@ -227,42 +229,63 @@ def redact(text: str, secrets: dict[str, str]) -> str:
 
 
 # ---------- approval ----------
+#
+# A grant authorises one exact command string to use the secrets shown in the
+# dialog. Grants live only in the memory of a GrantStore (one per MCP server
+# process = one agent session), so there is no file an agent could forge. The
+# CLI passes no store and therefore prompts on every exec.
 
-def current_requester() -> str:
-    """Identity a grant is bound to. The MCP server sets KEYGRANT_REQUESTER to
-    its per-session id; bare CLI calls fall back to their parent process id, so
-    a grant approved for one agent session cannot be reused by another."""
-    return os.environ.get("KEYGRANT_REQUESTER") or f"ppid:{os.getppid()}"
+class GrantStore:
+    """In-memory grants for one agent session: (command, name) -> issued_at."""
+
+    def __init__(self) -> None:
+        self._issued: dict[tuple[str, str], float] = {}
+
+    def covers(self, name: str, command: str, revocations: dict) -> bool:
+        issued = self._issued.get((command, name))
+        if issued is None:
+            return False
+        if time.time() >= issued + GRANT_TTL_SECONDS:
+            return False
+        revoked = max(revocations.get(name, 0), revocations.get("*", 0))
+        return issued > revoked
+
+    def add(self, names: list[str], command: str) -> None:
+        now = time.time()
+        for name in names:
+            self._issued[(command, name)] = now
 
 
-def load_grants() -> dict:
+def load_revocations() -> dict:
+    """name|"*" -> unix time; grants issued before it are void. A tampered
+    file can only revoke more, so it is safe for it to be user-writable. An
+    unreadable file revokes everything (fail closed)."""
     try:
-        with open(GRANTS_PATH, "r", encoding="utf-8") as f:
-            grants = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+        with open(REVOCATIONS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
         return {}
-    now = time.time()
-    return {
-        name: g for name, g in grants.items()
-        if isinstance(g, dict) and g.get("exp", 0) > now
-    }
+    except (OSError, ValueError):
+        return {"*": float("inf")}
+    if not isinstance(data, dict):
+        return {"*": float("inf")}
+    return {k: v for k, v in data.items() if isinstance(v, (int, float))}
 
 
-def save_grants(grants: dict) -> None:
+def save_revocations(revocations: dict) -> None:
     os.makedirs(VAULT_DIR, exist_ok=True)
-    tmp = GRANTS_PATH + ".tmp"
+    tmp = REVOCATIONS_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(grants, f, indent=2)
-    os.replace(tmp, GRANTS_PATH)
+        json.dump(revocations, f, indent=2)
+    os.replace(tmp, REVOCATIONS_PATH)
 
 
 def _dialog_text(names: list[str], command: str) -> str:
-    preview = command if len(command) <= 200 else command[:200] + "…"
     return (
         "An AI agent requests access to secret(s):\n\n"
         + "\n".join(f"    {n}" for n in names)
-        + f"\n\nCommand:\n    {preview}\n\n"
-        + f"Allow for {GRANT_TTL_SECONDS // 60} minutes?"
+        + f"\n\nCommand:\n    {command}\n\n"
+        + f"Allow this exact command for {GRANT_TTL_SECONDS // 60} minutes?"
     )
 
 
@@ -328,14 +351,20 @@ def _approval_dialog(names: list[str], command: str, timeout_ms: int) -> bool:
     return False  # no interactive channel on this platform: deny by default
 
 
-def request_approval(names: list[str], command: str) -> tuple[bool, str]:
-    """Return (allowed, denial_reason). Prompts for names not granted to the
-    current requester; grants made for other requesters do not carry over."""
-    requester = current_requester()
-    grants = load_grants()
+def request_approval(names: list[str], command: str,
+                     store: "GrantStore | None" = None) -> tuple[bool, str]:
+    """Return (allowed, denial_reason). Prompts for names the store does not
+    already grant for this exact command; with no store, always prompts."""
+    if len(command) > MAX_COMMAND_CHARS:
+        return False, (
+            f"command is longer than {MAX_COMMAND_CHARS} characters and cannot "
+            "be shown in full for review; put the logic in a script file and "
+            "run that instead"
+        )
+    revocations = load_revocations()
     pending = [
         n for n in names
-        if not (n in grants and grants[n].get("req") == requester)
+        if store is None or not store.covers(n, command, revocations)
     ]
     if not pending:
         return True, ""
@@ -345,11 +374,8 @@ def request_approval(names: list[str], command: str) -> tuple[bool, str]:
             f"user denied access to: {', '.join(pending)} "
             "(approval dialog declined or timed out)"
         )
-    grants = load_grants()
-    expiry = time.time() + GRANT_TTL_SECONDS
-    for name in pending:
-        grants[name] = {"exp": expiry, "req": requester}
-    save_grants(grants)
+    if store is not None:
+        store.add(pending, command)
     return True, ""
 
 
@@ -467,17 +493,14 @@ def cmd_revoke(args: list[str]) -> int:
     if not args:
         print("usage: keygrant revoke NAME | --all", file=sys.stderr)
         return 2
-    if args[0] == "--all":
-        save_grants({})
-        print("revoked: all grants")
-        return 0
-    grants = load_grants()
-    if args[0] not in grants:
-        print(f"no active grant for: {args[0]}")
-        return 0
-    del grants[args[0]]
-    save_grants(grants)
-    print(f"revoked: {args[0]}")
+    key = "*" if args[0] == "--all" else args[0]
+    revocations = load_revocations()
+    if revocations.get("*") == float("inf"):
+        revocations = {}  # rewrite an unreadable file
+    revocations[key] = time.time()
+    save_revocations(revocations)
+    print(f"revoked: {'all grants' if key == '*' else key} "
+          "(grants issued before now are void in every session)")
     return 0
 
 
