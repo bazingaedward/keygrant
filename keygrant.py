@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """keygrant — per-command secret injection for AI coding agents (prototype).
 
 Secrets are stored in an OS-native keystore: DPAPI-encrypted values inside

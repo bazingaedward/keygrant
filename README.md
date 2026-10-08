@@ -1,4 +1,4 @@
-﻿# keygrant
+# keygrant
 
 ![demo: agent requests a secret, user approves via native dialog, output comes back redacted](docs/demo.gif)
 

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """keygrant MCP server (prototype) — stdio JSON-RPC, zero dependencies.
 
 Exposes the DPAPI vault to AI agents WITHOUT ever returning secret values:
