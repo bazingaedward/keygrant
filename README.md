@@ -1,5 +1,7 @@
 # keygrant
 
+<!-- mcp-name: io.github.bazingaedward/keygrant -->
+
 ![demo: agent requests a secret, user approves via native dialog, output comes back redacted](https://raw.githubusercontent.com/bazingaedward/keygrant/master/docs/demo.gif)
 
 Per-command secret injection for AI coding agents. Secrets live in a local

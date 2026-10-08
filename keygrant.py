@@ -18,6 +18,8 @@ Commands:
   keygrant revoke NAME|--all             revoke active approval grants
   keygrant init                          wire up the current project: .mcp.json
                                           entry + CLAUDE.md guidance for agents
+  keygrant mcp                           run the MCP server on stdio (same as
+                                          keygrant-mcp)
 
 Using a secret requires user approval via a native dialog; approval grants
 access for 15 minutes (stored in grants.json, bound to the requesting
@@ -535,13 +537,20 @@ def cmd_init(_args: list[str]) -> int:
     return 0
 
 
+def cmd_mcp(args: list[str]) -> int:
+    import keygrant_mcp
+    keygrant_mcp.main()
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__.strip(), file=sys.stderr)
         return 2
     cmd, args = sys.argv[1], sys.argv[2:]
     handlers = {"set": cmd_set, "list": cmd_list, "rm": cmd_rm,
-                "exec": cmd_exec, "revoke": cmd_revoke, "init": cmd_init}
+                "exec": cmd_exec, "revoke": cmd_revoke, "init": cmd_init,
+                "mcp": cmd_mcp}
     if cmd not in handlers:
         print(f"error: unknown command: {cmd}", file=sys.stderr)
         return 2
