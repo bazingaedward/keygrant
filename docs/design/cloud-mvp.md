@@ -169,9 +169,9 @@ there is no update or delete API.
 ## Decisions (2026-10-08)
 
 - GitHub OAuth App is owned by the personal `bazingaedward` account.
+- Hosted on the personal Cloudflare account.
 - Audit command field defaults to `full`; orgs can switch to `sha256`.
 
 ## Open questions
 
 - Domain: `api.keygrant.app` (the homepage domain in `pyproject.toml`)?
-- Which Cloudflare account hosts it — personal or company?
