@@ -1,11 +1,16 @@
 #!/bin/zsh
 # keygrant Mac demo GIF: approval popup -> injection -> redaction
 set -e
-GIFDIR="${0:A:h}"
-VAULT="$HOME/.config/keygrant/vault.json"
+OUT="$(mktemp -d)"
+# throwaway vault so the demo never lists the recorder's real secrets
+export XDG_CONFIG_HOME="$OUT/config"
+VAULT="$XDG_CONFIG_HOME/keygrant/vault.json"
 
-keygrant revoke --all >/dev/null 2>&1 || true
-keygrant rm STRIPE_KEY >/dev/null 2>&1 || true
+cleanup() {
+  keygrant revoke --all >/dev/null 2>&1 || true
+  keygrant rm STRIPE_KEY >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
 run() {
   osascript -e 'on run argv' \
@@ -13,23 +18,33 @@ run() {
     -e 'end run' "$1" >/dev/null
 }
 
-osascript <<'EOF'
+# macOS places the approval dialog around the upper third of the main
+# display; put the window's title bar above that so the capture region
+# (window content only) contains the whole dialog but never the title
+read SW SH <<<"$(osascript -l JavaScript -e \
+  'ObjC.import("AppKit"); var f=$.NSScreen.mainScreen.frame.size; f.width+" "+f.height')"
+W=1000; H=600
+X=$(( (SW - W) / 2 )); Y=$(( SH / 3 - 210 ))
+
+osascript <<EOF
 tell application "Terminal"
   activate
-  do script "export PROMPT='%F{green}❯%f '; clear"
-  set bounds of front window to {240, 140, 1240, 660}
+  do script "export XDG_CONFIG_HOME='$XDG_CONFIG_HOME' PROMPT='%F{green}❯%f '; clear"
+  set bounds of front window to {$X, $Y, $((X + W)), $((Y + H))}
   try
     set font size of selected tab of front window to 16
   end try
 end tell
 EOF
 sleep 2
-run "clear"
+run "clear; echo"
 sleep 1
 
-# capture ONLY the window content area (below title bar) — titles never appear
-screencapture -v -R 242,172,996,484 "$GIFDIR/demo_raw.mov" &
+# screencapture -v stops when a character arrives on stdin (it ignores SIGINT)
+mkfifo "$OUT/ctl"
+screencapture -v -R $((X + 2)),$((Y + 44)),$((W - 4)),$((H - 48)) "$OUT/demo_raw.mov" <"$OUT/ctl" &
 REC=$!
+exec 3>"$OUT/ctl"
 sleep 2
 
 run "echo 'sk-live-51HxDEMOonly0000' | keygrant set STRIPE_KEY --desc 'Stripe secret'"
@@ -47,15 +62,13 @@ sleep 2.5
 run "keygrant exec --redact STRIPE_KEY -- sh -c 'echo \$STRIPE_KEY'"
 sleep 5
 
-kill -INT $REC
+print -u3 x
+exec 3>&-
 wait $REC 2>/dev/null || true
 
-keygrant revoke --all >/dev/null 2>&1 || true
-keygrant rm STRIPE_KEY >/dev/null 2>&1 || true
-
-ffmpeg -y -v error -i "$GIFDIR/demo_raw.mov" \
-  -vf "fps=8,scale=960:-1:flags=lanczos,palettegen" "$GIFDIR/palette.png"
-ffmpeg -y -v error -i "$GIFDIR/demo_raw.mov" -i "$GIFDIR/palette.png" \
+ffmpeg -y -v error -i "$OUT/demo_raw.mov" \
+  -vf "fps=8,scale=960:-1:flags=lanczos,palettegen" "$OUT/palette.png"
+ffmpeg -y -v error -i "$OUT/demo_raw.mov" -i "$OUT/palette.png" \
   -lavfi "fps=8,scale=960:-1:flags=lanczos[x];[x][1:v]paletteuse" \
-  "$GIFDIR/demo-mac.gif"
-ls -la "$GIFDIR/demo-mac.gif"
+  "$OUT/demo-mac.gif"
+echo "$OUT/demo-mac.gif"
