@@ -1,0 +1,16 @@
+name = "keygrant-api"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[vars]
+# Public client ID of the GitHub OAuth App (owner: bazingaedward).
+# The client secret is set with: wrangler secret put GITHUB_CLIENT_SECRET
+GITHUB_CLIENT_ID = "REPLACE_WITH_GITHUB_OAUTH_CLIENT_ID"
+GITHUB_API = "https://api.github.com"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "keygrant"
+# Filled in after: wrangler d1 create keygrant
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

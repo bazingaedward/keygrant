@@ -59,9 +59,13 @@ Non-goals (later)
   (`keygrant login` prints a code; the user confirms in a browser). Device
   flow needs only a public client ID.
 - The CLI sends the GitHub token to `POST /v1/auth/github` once. The Worker
-  verifies it with GitHub's `/user` API, then issues **its own** short-lived
-  access token (15 min) plus a rotating refresh token, and discards the GitHub
-  token. Our API never accepts GitHub tokens elsewhere (no token passthrough).
+  checks it with GitHub's `POST /applications/{client_id}/token` (client
+  secret held as a Worker secret), which proves the token was issued to
+  *our* OAuth App — a valid token from any other app is rejected. It then
+  revokes the GitHub token and issues **its own** short-lived access token
+  (15 min) plus a single-use rotating refresh token (30 days). Our API never
+  accepts GitHub tokens elsewhere (no token passthrough). Tokens are stored
+  server-side only as SHA-256 hashes.
 - Our tokens are stored in the local keystore under a reserved account, never
   in a plain file.
 
@@ -131,7 +135,8 @@ there is no update or delete API.
 | `POST /v1/orgs` · `POST /v1/orgs/:id/members` · `DELETE …/members/:user` | Teams |
 | `POST /v1/audit` · `GET /v1/orgs/:id/audit` | Upload and read audit events |
 
-- Rate limiting per token; request bodies capped; CORS closed (CLI only).
+- Request bodies capped at 64 KB; CORS closed (CLI only). Rate limiting per
+  token is still to do (Workers rate-limiting binding) before public beta.
 
 ### Client
 
@@ -144,7 +149,8 @@ there is no update or delete API.
 ## Phasing
 
 1. **Skeleton:** Worker + D1 schema + GitHub login + device registration;
-   `keygrant login` end to end on staging.
+   `keygrant login` end to end on staging. *Code done 2026-10-08 (tested
+   locally); deploy pending the Cloudflare account and OAuth App.*
 2. **Personal sync:** key hierarchy, envelopes, device approval, recovery
    key, `sync`, `set --vault`.
 3. **Teams and audit:** orgs, membership, envelope fan-out, removal flow,

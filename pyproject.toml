@@ -20,6 +20,9 @@ classifiers = [
     "Topic :: Security",
 ]
 
+[project.optional-dependencies]
+cloud = ["cryptography>=42"]
+
 [project.urls]
 Homepage = "https://keygrant.app"
 Repository = "https://github.com/bazingaedward/keygrant"
@@ -29,4 +32,4 @@ keygrant = "keygrant:main"
 keygrant-mcp = "keygrant_mcp:main"
 
 [tool.setuptools]
-py-modules = ["keygrant", "keygrant_mcp"]
+py-modules = ["keygrant", "keygrant_mcp", "keygrant_cloud"]

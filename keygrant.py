@@ -20,6 +20,8 @@ Commands:
                                           entry + CLAUDE.md guidance for agents
   keygrant mcp                           run the MCP server on stdio (same as
                                           keygrant-mcp)
+  keygrant login | logout | whoami       keygrant cloud sign-in (GitHub)
+  keygrant devices [rm ID]               list or remove your cloud devices
 
 Using a secret requires user approval via a native dialog; approval grants
 access for 15 minutes (stored in grants.json, bound to the requesting
@@ -551,6 +553,9 @@ def main() -> int:
     handlers = {"set": cmd_set, "list": cmd_list, "rm": cmd_rm,
                 "exec": cmd_exec, "revoke": cmd_revoke, "init": cmd_init,
                 "mcp": cmd_mcp}
+    if cmd in ("login", "logout", "whoami", "devices"):
+        import keygrant_cloud
+        handlers.update(keygrant_cloud.COMMANDS)
     if cmd not in handlers:
         print(f"error: unknown command: {cmd}", file=sys.stderr)
         return 2

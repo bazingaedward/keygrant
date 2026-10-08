@@ -6,3 +6,6 @@ vault.json
 build/
 egg-info/
 *.egg-info/
+node_modules/
+.wrangler/
+.dev.vars
