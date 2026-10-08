@@ -20,6 +20,10 @@ classifiers = [
     "Topic :: Security",
 ]
 
+[project.urls]
+Homepage = "https://keygrant.app"
+Repository = "https://github.com/bazingaedward/keygrant"
+
 [project.scripts]
 keygrant = "keygrant:main"
 keygrant-mcp = "keygrant_mcp:main"
