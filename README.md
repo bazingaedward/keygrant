@@ -44,6 +44,12 @@ keygrant init
 existing servers) and appends usage guidance for the model to `CLAUDE.md`,
 both idempotently. Restart Claude Code in that folder to load the server.
 
+### macOS
+
+Values live in the login Keychain; approval is a native dialog.
+
+![macOS: store a secret, approve via native dialog, value injected, output redacted](docs/demo-mac.gif)
+
 ## Threat model
 
 **What this protects against:**
