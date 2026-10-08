@@ -1,6 +1,6 @@
 # keygrant
 
-![demo: agent requests a secret, user approves via native dialog, output comes back redacted](docs/demo.gif)
+![demo: agent requests a secret, user approves via native dialog, output comes back redacted](https://raw.githubusercontent.com/bazingaedward/keygrant/master/docs/demo.gif)
 
 Per-command secret injection for AI coding agents. Secrets live in a local
 DPAPI-encrypted vault; the model's context only ever sees secret **names** —
@@ -48,7 +48,7 @@ both idempotently. Restart Claude Code in that folder to load the server.
 
 Values live in the login Keychain; approval is a native dialog.
 
-![macOS: store a secret, approve via native dialog, value injected, output redacted](docs/demo-mac.gif)
+![macOS: store a secret, approve via native dialog, value injected, output redacted](https://raw.githubusercontent.com/bazingaedward/keygrant/master/docs/demo-mac.gif)
 
 ## Threat model
 
