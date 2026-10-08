@@ -28,8 +28,11 @@ context, only the execution environment.
 ## Install
 
 ```bash
-pip install .        # or: uv tool install .
+uv tool install keygrant     # or: pipx install keygrant
 ```
+
+Requires Python ≥ 3.10. macOS ships Python 3.9, so a bare `pip install`
+there fails; `uv` fetches a suitable Python automatically.
 
 Then, in each project where agents should use secrets:
 
