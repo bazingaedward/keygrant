@@ -20,6 +20,9 @@ Commands:
                                           entry + CLAUDE.md guidance for agents
   keygrant mcp                           run the MCP server on stdio (same as
                                           keygrant-mcp)
+  keygrant cloud init|status             zero-knowledge cloud sync (see
+  keygrant devices [add] | pair           keygrant_cloud.py; needs
+  keygrant sync | push [--delete] NAMES   `keygrant[cloud]`)
 
 Using a secret requires user approval via a native dialog; approval grants
 access for 15 minutes (stored in grants.json, bound to the requesting
@@ -368,8 +371,9 @@ def cmd_set(args: list[str]) -> int:
         print("error: empty value on stdin", file=sys.stderr)
         return 1
     vault = load_vault()
-    if name in vault:
-        delete_value(vault[name])
+    old = vault.get(name)
+    if old:
+        delete_value(old)
     record = encrypt_value(value)
     record.update({
         "desc": desc,
@@ -377,6 +381,10 @@ def cmd_set(args: list[str]) -> int:
         "last_used": None,
         "use_count": 0,
     })
+    if old and old.get("cloud"):
+        # keep the cloud link so `keygrant push` updates the same item;
+        # "dirty" stops `keygrant sync` from overwriting the unpushed edit
+        record["cloud"] = {**old["cloud"], "dirty": True}
     vault[name] = record
     save_vault(vault)
     print(f"stored: {name}")
@@ -551,6 +559,9 @@ def main() -> int:
     handlers = {"set": cmd_set, "list": cmd_list, "rm": cmd_rm,
                 "exec": cmd_exec, "revoke": cmd_revoke, "init": cmd_init,
                 "mcp": cmd_mcp}
+    if cmd in ("cloud", "devices", "pair", "sync", "push"):
+        import keygrant_cloud
+        handlers.update(keygrant_cloud.COMMANDS)
     if cmd not in handlers:
         print(f"error: unknown command: {cmd}", file=sys.stderr)
         return 2

@@ -103,6 +103,22 @@ app with toast notifications; the grant semantics stay the same.
 The vault file also records usage metadata (use count, last used) as the seed
 of an audit trail.
 
+## Cloud sync (preview)
+
+Optional end-to-end encrypted sync between your devices
+(`uv tool install 'keygrant[cloud]'`). Values are encrypted on the device;
+the server only ever stores ciphertext. Nothing is uploaded until you `push`.
+
+```bash
+keygrant cloud init        # create an account; prints your Emergency Kit
+keygrant push STRIPE_KEY   # upload a local secret
+keygrant devices add       # on this device: shows a pairing code
+keygrant pair              # on the new device: enter the code, confirm fingerprints
+keygrant sync              # pull changes into the local vault
+```
+
+Design and threat model: [`docs/design/cloud-sync-client.md`](docs/design/cloud-sync-client.md).
+
 ## Roadmap (prototype → product)
 
 1. Resident tray app (replaces the modal dialog; approval history, revoke UI)
