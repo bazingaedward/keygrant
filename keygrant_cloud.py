@@ -407,17 +407,24 @@ def devices_add() -> int:
                  lambda r: r["status"] != "open" or r["expires_at"] < _now_iso())
     if seen["status"] != "claimed":
         raise CloudError("pairing expired before a device claimed it")
+    kind = seen.get("new_kind") or "cli"
     fp = fingerprint(b64d(seen["new_pubkey"]))
-    print(f"Device '{seen['new_name']}' wants to join, fingerprint:\n\n    {fp}\n")
+    print(f"Device '{seen['new_name']}' ({kind}) wants to join, fingerprint:\n\n    {fp}\n")
+    if kind == "browser":
+        print("Browser device: can approve requests and view metadata only —")
+        print("it will NOT receive the Secret Key and can never decrypt values.\n")
     if ask("Does the new device show exactly this fingerprint? Type 'yes' to approve: ") != "yes":
         print("not approved")
         return 1
     signer = nacl.signing.SigningKey(_secret(state, "device_key"))
-    sealed_sk = nacl.public.SealedBox(nacl.public.PublicKey(b64d(seen["new_eph_pubkey"])))
-    api(state, "POST", f"/pairings/{p['id']}/approve", {
+    approval = {
         "signature": b64e(signer.sign(pair_statement(state["account_id"], seen["new_pubkey"])).signature),
-        "enc_secret_key": b64e(sealed_sk.encrypt(_secret(state, "secret_key"))),
-    })
+    }
+    if kind != "browser":
+        # Only full CLI devices receive the (sealed) Secret Key.
+        sealed_sk = nacl.public.SealedBox(nacl.public.PublicKey(b64d(seen["new_eph_pubkey"])))
+        approval["enc_secret_key"] = b64e(sealed_sk.encrypt(_secret(state, "secret_key")))
+    api(state, "POST", f"/pairings/{p['id']}/approve", approval)
     print(f"approved '{seen['new_name']}'")
     return 0
 
