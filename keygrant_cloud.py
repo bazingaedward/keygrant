@@ -157,10 +157,11 @@ def _tty_line(prompt: str) -> str:
         sys.stderr.write("\n")
         return "".join(chars).strip()
     try:
-        with open("/dev/tty", "r+") as tty:
-            tty.write(prompt)
-            tty.flush()
-            return tty.readline().strip()
+        # two handles: buffered "r+" needs a seekable stream, which a tty is not
+        with open("/dev/tty", "r") as tty_in, open("/dev/tty", "w") as tty_out:
+            tty_out.write(prompt)
+            tty_out.flush()
+            return tty_in.readline().strip()
     except OSError:
         raise CloudError("this step needs an interactive terminal; it never reads "
                          "stdin, so it cannot be answered by a script or an agent") from None
