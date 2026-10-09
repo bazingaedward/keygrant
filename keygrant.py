@@ -20,9 +20,11 @@ Commands:
                                           entry + CLAUDE.md guidance for agents
   keygrant mcp                           run the MCP server on stdio (same as
                                           keygrant-mcp)
-  keygrant cloud init|status             zero-knowledge cloud sync (see
-  keygrant devices [add] | pair           keygrant_cloud.py; needs
+  keygrant cloud init|status|enable-recovery|kit   zero-knowledge cloud sync
+  keygrant devices [add] | pair          (see keygrant_cloud.py; needs
   keygrant sync | push [--delete] NAMES   `keygrant[cloud]`)
+  keygrant recover                       join a new device with the emergency
+                                          kit alone (no old device online)
 
 Using a secret requires user approval via a native dialog showing the full
 command. Through the MCP server, approval covers that exact command for 15
@@ -582,7 +584,7 @@ def main() -> int:
     handlers = {"set": cmd_set, "list": cmd_list, "rm": cmd_rm,
                 "exec": cmd_exec, "revoke": cmd_revoke, "init": cmd_init,
                 "mcp": cmd_mcp}
-    if cmd in ("cloud", "devices", "pair", "sync", "push"):
+    if cmd in ("cloud", "devices", "pair", "sync", "push", "recover"):
         import keygrant_cloud
         handlers.update(keygrant_cloud.COMMANDS)
     if cmd not in handlers:

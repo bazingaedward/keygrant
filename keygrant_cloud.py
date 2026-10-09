@@ -134,6 +134,28 @@ def pair_statement(account_id: str, pubkey_b64: str) -> bytes:
     return f"keygrant/pair/v1\n{account_id}\n{pubkey_b64}".encode()
 
 
+def recover_statement(account_id: str, challenge: str, pubkey_b64: str) -> bytes:
+    return f"keygrant/recover/v1\n{account_id}\n{challenge}\n{pubkey_b64}".encode()
+
+
+def recovery_signer(auk: bytes):
+    """Deterministic Ed25519 key from the AUK: anyone who can derive the AUK
+    (password + Secret Key) can prove account ownership to the server, which
+    stores only the public half."""
+    return _nacl().signing.SigningKey(hkdf(auk, b"keygrant/recovery/v1"))
+
+
+def parse_secret_key(text: str) -> bytes:
+    s = text.strip().upper().replace("-", "").removeprefix("A3")
+    try:
+        sk = base64.b32decode(s + "=" * (-len(s) % 8))
+    except Exception:
+        raise CloudError("that does not look like a Secret Key (A3-XXXXX-…)") from None
+    if len(sk) != 16:
+        raise CloudError("Secret Key has the wrong length")
+    return sk
+
+
 def fingerprint(pubkey: bytes) -> str:
     h = hashlib.sha256(pubkey).hexdigest()[:16]
     return "-".join(h[i:i + 4] for i in range(0, 16, 4))
@@ -301,6 +323,7 @@ def cloud_init() -> int:
         "user_pubkey": b64e(user_pub),
         "user_pubkey_mac": mac(k_mac, "user-pubkey", account_id, user_pub),
         "enc_user_privkey": seal(k_enc, user.encode(), user_key_aad(account_id)),
+        "recovery_pubkey": b64e(recovery_signer(auk).verify_key.encode()),
     })
     vault_id, vault_key = str(uuid.uuid4()), os.urandom(32)
     api(state, "POST", "/vaults", {
@@ -362,13 +385,44 @@ def cloud_status() -> int:
     return 0
 
 
+def cloud_enable_recovery() -> int:
+    """Backfill for accounts created before recovery existed."""
+    state = require_account(load_state())
+    password = ask_secret("Account password: ")
+    auk = derive_auk(password, _secret(state, "secret_key"), state["account_id"])
+    _, k_mac = subkeys(auk)
+    keys = api(state, "GET", "/accounts/keys")
+    if not mac_ok(k_mac, keys.get("user_pubkey_mac"), "user-pubkey",
+                  state["account_id"], b64d(keys["user_pubkey"])):
+        raise CloudError("wrong password")
+    api(state, "POST", "/accounts/recovery-key",
+        {"recovery_pubkey": b64e(recovery_signer(auk).verify_key.encode())})
+    print("recovery enabled — a new device can now join on its own with")
+    print("`keygrant recover` using the emergency kit (`keygrant cloud kit`)")
+    return 0
+
+
+def cloud_kit() -> int:
+    state = require_account(load_state())
+    print("\nEMERGENCY KIT — write this down and keep it offline:\n")
+    print(f"  Account ID:  {state['account_id']}")
+    print(f"  Secret Key:  {format_secret_key(_secret(state, 'secret_key'))}\n")
+    print("With these plus your password, `keygrant recover` can join a new")
+    print("device without any old device online. Guard them accordingly.")
+    return 0
+
+
 def cmd_cloud(args: list[str]) -> int:
     sub = args[0] if args else "status"
     if sub == "init":
         return cloud_init()
     if sub == "status":
         return cloud_status()
-    print("usage: keygrant cloud init | status", file=sys.stderr)
+    if sub == "enable-recovery":
+        return cloud_enable_recovery()
+    if sub == "kit":
+        return cloud_kit()
+    print("usage: keygrant cloud init | status | enable-recovery | kit", file=sys.stderr)
     return 2
 
 
@@ -581,5 +635,39 @@ def cmd_push(args: list[str]) -> int:
     return 1 if failed else 0
 
 
+def cmd_recover(_args: list[str]) -> int:
+    """Join this device to an account using only the emergency kit."""
+    nacl = _nacl()
+    if load_state().get("account_id"):
+        raise CloudError("this device already belongs to a cloud account")
+    account_id = ask("Account ID: ").strip()
+    sk = parse_secret_key(ask("Secret Key (A3-…): "))
+    password = ask_secret("Account password: ")
+    auk = derive_auk(password, sk, account_id)
+    start = api(None, "POST", "/recovery/start", {"account_id": account_id})
+    signing = nacl.signing.SigningKey.generate()
+    pub = b64e(signing.verify_key.encode())
+    sig = recovery_signer(auk).sign(
+        recover_statement(account_id, start["challenge"], pub)).signature
+    try:
+        done = api(None, "POST", "/recovery/complete", {
+            "recovery_id": start["recovery_id"], "signature": b64e(sig),
+            "pubkey": pub, "name": _device_name()})
+    except CloudError as exc:
+        if len(exc.args) > 1 and exc.args[1] == 403:
+            raise CloudError("recovery rejected: wrong password or Secret Key") from None
+        raise
+    state = {"api": API, "account_id": account_id, "device_id": done["device_id"],
+             "device_pub": pub, "cursor": 0, "items": {}}
+    _store(state, "device_key", signing.encode())
+    _store(state, "secret_key", sk)
+    save_state(state)
+    unlock(state, password)
+    print(f"recovered — '{_device_name()}' joined account {account_id}")
+    print(f"this device fingerprint: {fingerprint(b64d(pub))}")
+    print("run `keygrant sync` to pull your secrets")
+    return 0
+
+
 COMMANDS = {"cloud": cmd_cloud, "devices": cmd_devices, "pair": cmd_pair,
-            "sync": cmd_sync, "push": cmd_push}
+            "sync": cmd_sync, "push": cmd_push, "recover": cmd_recover}
