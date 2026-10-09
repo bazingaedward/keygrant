@@ -138,6 +138,17 @@ def recover_statement(account_id: str, challenge: str, pubkey_b64: str) -> bytes
     return f"keygrant/recover/v1\n{account_id}\n{challenge}\n{pubkey_b64}".encode()
 
 
+def approval_request_hash(requester: str, names: list[str], command: str) -> str:
+    """Canonical request hash (SPEC §10.1 E). The verdict signs over this, and
+    the CLI recomputes it locally — so the approver provably saw THIS request."""
+    return hashlib.sha256(
+        _lp("keygrant/approval-request/v1", requester, ",".join(names), command)).hexdigest()
+
+
+def verdict_statement(approval_id: str, command_hash: str, verdict: str, ttl: int) -> bytes:
+    return f"keygrant/verdict/v1\n{approval_id}\n{command_hash}\n{verdict}\n{ttl}".encode()
+
+
 def recovery_signer(auk: bytes):
     """Deterministic Ed25519 key from the AUK: anyone who can derive the AUK
     (password + Secret Key) can prove account ownership to the server, which
@@ -431,8 +442,10 @@ def cmd_cloud(args: list[str]) -> int:
 def cmd_devices(args: list[str]) -> int:
     if args == ["add"]:
         return devices_add()
+    if args == ["trust"]:
+        return devices_trust()
     if args:
-        print("usage: keygrant devices [add]", file=sys.stderr)
+        print("usage: keygrant devices [add|trust]", file=sys.stderr)
         return 2
     state = require_account(load_state())
     for d in api(state, "GET", "/devices")["devices"]:
@@ -478,9 +491,80 @@ def devices_add() -> int:
         # Only full CLI devices receive the (sealed) Secret Key.
         sealed_sk = nacl.public.SealedBox(nacl.public.PublicKey(b64d(seen["new_eph_pubkey"])))
         approval["enc_secret_key"] = b64e(sealed_sk.encrypt(_secret(state, "secret_key")))
-    api(state, "POST", f"/pairings/{p['id']}/approve", approval)
+    resp = api(state, "POST", f"/pairings/{p['id']}/approve", approval)
+    if kind == "browser":
+        # This CLI verified the fingerprint itself, so it may trust verdicts
+        # signed by this approver (used by remote approval).
+        state.setdefault("approvers", {})[resp["device_id"]] = {
+            "pubkey": seen["new_pubkey"], "name": seen["new_name"]}
+        save_state(state)
     print(f"approved '{seen['new_name']}'")
     return 0
+
+
+def devices_trust() -> int:
+    """Backfill: trust browser devices paired before the approver list existed
+    (or by another CLI device). Verify each fingerprint against the one shown
+    on that browser's console page before saying yes."""
+    state = require_account(load_state())
+    approvers = state.setdefault("approvers", {})
+    candidates = [d for d in api(state, "GET", "/devices")["devices"]
+                  if d.get("kind") == "browser" and d["id"] not in approvers]
+    if not candidates:
+        print("no untrusted browser devices")
+        return 0
+    added = 0
+    for d in candidates:
+        fp = fingerprint(b64d(d["pubkey"]))
+        print(f"\nbrowser device '{d['name']}', fingerprint:\n\n    {fp}\n")
+        if ask("Does that browser's console page show exactly this fingerprint? "
+               "Type 'yes' to trust its verdicts: ") == "yes":
+            approvers[d["id"]] = {"pubkey": d["pubkey"], "name": d["name"]}
+            added += 1
+    save_state(state)
+    print(f"\ntrusted {added} approver(s)")
+    return 0
+
+
+# ---------- remote approval (C2) ----------
+
+def remote_approval(names: list[str], command: str, requester: str):
+    """Relay an approval request to trusted browser approvers and verify the
+    signed verdict. True allowed, False denied/invalid, None not configured."""
+    state = load_state()
+    approvers = state.get("approvers") or {}
+    if not state.get("account_id") or not approvers:
+        return None
+    command_hash = approval_request_hash(requester, names, command)
+    created = api(state, "POST", "/approvals", {
+        "names": names, "command_preview": command,
+        "command_hash": command_hash, "requester": requester,
+        "ttl_seconds": 120,
+    })
+    print("keygrant: no local answer — asking your approver at "
+          "https://keygrant.app/app (2 min window)", file=sys.stderr)
+    try:
+        r = _poll(lambda: api(state, "GET", f"/approvals/{created['id']}"),
+                  lambda r: r["status"] != "pending", timeout=125)
+    except CloudError:
+        return "remote approval timed out"
+    if r["status"] != "allowed":
+        return False
+    approver = approvers.get(r.get("verdict_device") or "")
+    if not approver:
+        print("keygrant: verdict signed by an untrusted device — refusing",
+              file=sys.stderr)
+        return False
+    try:
+        _nacl().signing.VerifyKey(b64d(approver["pubkey"])).verify(
+            verdict_statement(created["id"], command_hash, "allowed", r["verdict_ttl"]),
+            b64d(r["verdict_sig"]))
+    except Exception:
+        print("keygrant: verdict signature failed verification — refusing",
+              file=sys.stderr)
+        return False
+    print(f"keygrant: allowed remotely by '{approver['name']}'", file=sys.stderr)
+    return True
 
 
 def cmd_pair(_args: list[str]) -> int:

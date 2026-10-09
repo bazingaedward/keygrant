@@ -294,10 +294,10 @@ def _dialog_text(names: list[str], command: str) -> str:
     )
 
 
-def _approval_dialog_win(text: str, timeout_ms: int) -> bool:
+def _approval_dialog_win(text: str, timeout_ms: int) -> str:
     MB_YESNO, MB_ICONWARNING = 0x4, 0x30
     MB_SYSTEMMODAL, MB_SETFOREGROUND, MB_TOPMOST = 0x1000, 0x10000, 0x40000
-    IDYES = 6
+    IDYES, IDNO = 6, 7
     fn = ctypes.windll.user32.MessageBoxTimeoutW
     fn.argtypes = [wt.HWND, ctypes.c_wchar_p, ctypes.c_wchar_p,
                    wt.UINT, wt.WORD, wt.DWORD]
@@ -307,10 +307,12 @@ def _approval_dialog_win(text: str, timeout_ms: int) -> bool:
         MB_YESNO | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST,
         0, timeout_ms,
     )
-    return result == IDYES
+    if result == IDYES:
+        return "allow"
+    return "deny" if result == IDNO else "timeout"
 
 
-def _approval_dialog_mac(text: str, timeout_ms: int) -> bool:
+def _approval_dialog_mac(text: str, timeout_ms: int) -> str:
     timeout_s = max(1, timeout_ms // 1000)
     body = json.dumps(text, ensure_ascii=False)
     script = (
@@ -320,14 +322,14 @@ def _approval_dialog_mac(text: str, timeout_ms: int) -> bool:
     )
     proc = subprocess.run(["osascript", "-e", script],
                           capture_output=True, text=True)
-    return (
-        proc.returncode == 0
-        and "button returned:Allow" in proc.stdout
-        and "gave up:false" in proc.stdout
-    )
+    if proc.returncode == 0 and "gave up:true" in proc.stdout:
+        return "timeout"
+    if proc.returncode == 0 and "button returned:Allow" in proc.stdout:
+        return "allow"
+    return "deny"
 
 
-def _approval_dialog_linux(text: str, timeout_ms: int) -> bool:
+def _approval_dialog_linux(text: str, timeout_ms: int) -> str:
     timeout_s = max(1, timeout_ms // 1000)
     try:
         proc = subprocess.run(
@@ -338,14 +340,16 @@ def _approval_dialog_linux(text: str, timeout_ms: int) -> bool:
             capture_output=True, text=True,
         )
     except FileNotFoundError:
-        print("keygrant: zenity not found; denying by default "
-              "(install zenity for approval dialogs)", file=sys.stderr)
-        return False
-    return proc.returncode == 0  # 1 = deny, 5 = timeout
+        # headless box: no local channel, let remote approval take over
+        return "timeout"
+    if proc.returncode == 0:
+        return "allow"
+    return "timeout" if proc.returncode == 5 else "deny"
 
 
-def _approval_dialog(names: list[str], command: str, timeout_ms: int) -> bool:
-    """Native, topmost yes/no dialog. Timeout or No = deny."""
+def _approval_dialog(names: list[str], command: str, timeout_ms: int) -> str:
+    """Native, topmost dialog. Returns 'allow', 'deny' or 'timeout' — an
+    explicit Deny is final, a timeout may escalate to a remote approver."""
     text = _dialog_text(names, command)
     if IS_WIN:
         return _approval_dialog_win(text, timeout_ms)
@@ -353,7 +357,20 @@ def _approval_dialog(names: list[str], command: str, timeout_ms: int) -> bool:
         return _approval_dialog_mac(text, timeout_ms)
     if IS_LINUX:
         return _approval_dialog_linux(text, timeout_ms)
-    return False  # no interactive channel on this platform: deny by default
+    return "timeout"  # no local channel; remote approval or deny
+
+
+def _remote_approval(names: list[str], command: str):
+    """Escalate to the web approver console. True allowed, False denied,
+    or a string/None explaining why remote approval was unavailable."""
+    try:
+        import keygrant_cloud
+    except Exception:
+        return None
+    try:
+        return keygrant_cloud.remote_approval(names, command, current_requester())
+    except Exception as exc:
+        return str(exc)
 
 
 def request_approval(names: list[str], command: str,
@@ -374,11 +391,20 @@ def request_approval(names: list[str], command: str,
     if not pending:
         return True, ""
     timeout_ms = int(os.environ.get("KEYGRANT_APPROVAL_TIMEOUT_MS", "60000"))
-    if not _approval_dialog(pending, command, timeout_ms):
-        return False, (
-            f"user denied access to: {', '.join(pending)} "
-            "(approval dialog declined or timed out)"
-        )
+    decision = _approval_dialog(pending, command, timeout_ms)
+    if decision == "deny":
+        return False, f"user denied access to: {', '.join(pending)}"
+    if decision == "timeout":
+        remote = _remote_approval(pending, command)
+        if remote is False:
+            return False, f"denied by the remote approver: {', '.join(pending)}"
+        if remote is not True:
+            why = f"; remote approval unavailable: {remote}" if remote else ""
+            return False, (
+                f"user denied access to: {', '.join(pending)} "
+                f"(approval dialog timed out{why})"
+            )
+        # remote allow falls through to grant
     if store is not None:
         store.add(pending, command)
     return True, ""
