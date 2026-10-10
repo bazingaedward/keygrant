@@ -32,6 +32,21 @@ sync work: https://keygrant.app/docs/
 
 ## Install
 
+### As a Claude Code plugin
+
+The plugin bundles the MCP server and a skill that teaches Claude to use it, so
+there's no per-project setup. It needs [uv](https://docs.astral.sh/uv/).
+
+```
+/plugin marketplace add bazingaedward/keygrant
+/plugin install keygrant@keygrant
+```
+
+Add secrets from your terminal with `uvx keygrant==0.1.6 set NAME`, or install
+the CLI as below.
+
+### As a CLI and MCP server
+
 ```bash
 uv tool install keygrant     # or: pipx install keygrant
 ```

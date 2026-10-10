@@ -1,0 +1,15 @@
+{
+  "name": "keygrant",
+  "description": "keygrant: secrets for AI coding agents that never enter the model's context",
+  "owner": {
+    "name": "Edward Qiu",
+    "url": "https://github.com/bazingaedward"
+  },
+  "plugins": [
+    {
+      "name": "keygrant",
+      "source": "./plugin",
+      "description": "Claude sees secret names, values are injected only into the approved command, output is redacted."
+    }
+  ]
+}

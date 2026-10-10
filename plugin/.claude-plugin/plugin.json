@@ -1,0 +1,18 @@
+{
+  "name": "keygrant",
+  "displayName": "keygrant",
+  "version": "0.1.6",
+  "description": "Secrets for AI coding agents: the model sees secret names, values are injected only into the command that needs them, and you approve every command in a native dialog.",
+  "author": {
+    "name": "Edward Qiu",
+    "url": "https://github.com/bazingaedward"
+  },
+  "homepage": "https://keygrant.app",
+  "repository": "https://github.com/bazingaedward/keygrant",
+  "license": "Apache-2.0",
+  "keywords": ["secrets", "api-keys", "credentials", "security", "mcp"],
+  "icon": "./icon.png",
+  "documentationUrl": "https://keygrant.app/docs/",
+  "supportUrl": "https://github.com/bazingaedward/keygrant/issues",
+  "privacyPolicyUrl": "https://keygrant.app/privacy/"
+}
