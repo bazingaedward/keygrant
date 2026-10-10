@@ -445,7 +445,18 @@ def cmd_set(args: list[str]) -> int:
     return 0
 
 
+def _auto_sync() -> None:
+    """Pull cloud changes first when a cloud account is set up; a no-op
+    without the [cloud] extra, an account, or a network."""
+    try:
+        import keygrant_cloud
+    except Exception:
+        return
+    keygrant_cloud.auto_sync()
+
+
 def cmd_list(_args: list[str]) -> int:
+    _auto_sync()
     vault = load_vault()
     if not vault:
         print("(vault empty)")
@@ -486,6 +497,7 @@ def cmd_exec(args: list[str]) -> int:
         print("error: no command after --", file=sys.stderr)
         return 2
 
+    _auto_sync()
     vault = load_vault()
     for name in names:
         if name not in vault:

@@ -115,13 +115,55 @@ Optional end-to-end encrypted sync between your devices
 (`uv tool install 'keygrant[cloud]'`). Values are encrypted on the device;
 the server only ever stores ciphertext. Nothing is uploaded until you `push`.
 
+**First device**
+
 ```bash
-keygrant cloud init        # create an account; prints your Emergency Kit
-keygrant push STRIPE_KEY   # upload a local secret
-keygrant devices add       # on this device: shows a pairing code
-keygrant pair              # on the new device: enter the code, confirm fingerprints
-keygrant sync              # pull changes into the local vault
+uv tool install 'keygrant[cloud]'
+keygrant cloud init        # choose a password; prints your Emergency Kit
+keygrant push STRIPE_KEY   # upload an existing local secret
 ```
+
+Write the Emergency Kit (Account ID + Secret Key) down and keep it offline.
+Your data can only be decrypted with your password **and** the Secret Key;
+nobody, including keygrant, can recover either for you.
+
+**More devices** — the old device must be online (it can be over SSH or
+remote desktop; pairing needs both devices at once, not in one place):
+
+```bash
+keygrant devices add       # old device: shows a pairing code
+keygrant pair              # new device: enter the code
+```
+
+Both screens then show a fingerprint. **Check they match** before typing
+`yes` on the old device — that check is what stops a malicious server from
+slipping in its own device. The new device asks for your password once.
+
+**Day to day**
+
+```bash
+echo "sk-..." | keygrant set STRIPE_KEY && keygrant push STRIPE_KEY   # add / change
+keygrant push --delete STRIPE_KEY                                     # remove everywhere
+keygrant sync                                                          # pull now
+```
+
+`list` and `exec` also pull changes on their own (at most once a minute,
+silently skipped when offline). If two devices change the same secret,
+the later `push` is refused until you `sync`; a local edit you haven't
+pushed is never overwritten.
+
+**Lost every device?** On a new machine, `keygrant recover` joins with the
+Emergency Kit and your password alone (accounts created before 0.1.4: run
+`keygrant cloud enable-recovery` once on an existing device).
+
+**Approve from your phone** — run `keygrant devices add` and enter the code
+at https://keygrant.app/app on your phone; the same fingerprint check makes
+that browser a trusted approver. When nobody answers the desktop dialog, the
+request goes to that page instead; an explicit Deny on the desktop is final.
+The browser can approve and see names, never values.
+
+**Leave** — `keygrant cloud delete` destroys the account and all ciphertext;
+secrets stay on each machine as local-only entries.
 
 Design and threat model: [`docs/design/cloud-sync-client.md`](docs/design/cloud-sync-client.md).
 

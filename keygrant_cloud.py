@@ -273,7 +273,8 @@ def require_unlocked(state: dict) -> dict:
 
 # ---------- HTTP ----------
 
-def api(state: dict | None, method: str, path: str, body: dict | None = None) -> dict:
+def api(state: dict | None, method: str, path: str, body: dict | None = None,
+        timeout: float = 30) -> dict:
     """Call the API; signs with the device key unless state is None."""
     data = b"" if body is None else json.dumps(body).encode()
     headers = {"content-type": "application/json", "user-agent": "keygrant-cli"}
@@ -286,13 +287,18 @@ def api(state: dict | None, method: str, path: str, body: dict | None = None) ->
                         "x-signature": b64e(signer.sign(payload.encode()).signature)})
     req = urllib.request.Request(API + path, data=data or None, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=30) as res:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
             return json.load(res)
     except urllib.error.HTTPError as exc:
         try:
             detail = json.load(exc).get("error")
         except ValueError:
             detail = None
+        if exc.code == 401 and state is not None:
+            detail = ("the server no longer recognises this device — it was removed, "
+                      "or the cloud account was deleted")
+        elif exc.code == 502:
+            detail = f"HTTP 502 — if you use an HTTP proxy, check it can reach {API} (no_proxy)"
         raise CloudError(f"{method} {path}: {detail or f'HTTP {exc.code}'}", exc.code) from None
     except urllib.error.URLError as exc:
         raise CloudError(f"cannot reach {API}: {exc.reason}") from None
@@ -635,12 +641,35 @@ def cmd_pair(_args: list[str]) -> int:
 
 # ---------- sync ----------
 
+AUTO_SYNC_INTERVAL = 60  # seconds between best-effort pulls from list/exec
+
+
+def auto_sync() -> None:
+    """Best-effort pull before `list`/`exec`: silent when offline, locked or
+    without an account, and throttled so back-to-back commands stay fast.
+    Never prompts and never pushes."""
+    try:
+        state = load_state()
+        if not state.get("vault_key"):
+            return
+        if time.time() - state.get("last_sync", 0) < AUTO_SYNC_INTERVAL:
+            return
+        pull(state, timeout=3)
+    except Exception:
+        pass
+
+
 def cmd_sync(_args: list[str]) -> int:
-    state = require_unlocked(load_state())
+    pulled, removed, skipped = pull(require_unlocked(load_state()))
+    print(f"sync: {pulled} updated, {removed} removed, {skipped} skipped")
+    return 0
+
+
+def pull(state: dict, timeout: float = 30) -> tuple[int, int, int]:
     vid, vault_key = state["vault_id"], _secret(state, "vault_key")
     known = state.setdefault("items", {})
     cursor = state.get("cursor", 0)
-    items = api(state, "GET", f"/vaults/{vid}/items?since_seq={cursor}")["items"]
+    items = api(state, "GET", f"/vaults/{vid}/items?since_seq={cursor}", timeout=timeout)["items"]
     vault = kg.load_vault()
     pulled = removed = skipped = 0
     for it in items:
@@ -695,9 +724,9 @@ def cmd_sync(_args: list[str]) -> int:
         pulled += 1
     kg.save_vault(vault)
     state["cursor"] = cursor
+    state["last_sync"] = time.time()
     save_state(state)
-    print(f"sync: {pulled} updated, {removed} removed, {skipped} skipped")
-    return 0
+    return pulled, removed, skipped
 
 
 def cmd_push(args: list[str]) -> int:

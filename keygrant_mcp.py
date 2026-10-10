@@ -165,7 +165,7 @@ def handle(msg: dict):
             "result": {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "keygrant", "version": "0.1.3"},
+                "serverInfo": {"name": "keygrant", "version": "0.1.4"},
             },
         }
     if method == "tools/list":
