@@ -653,7 +653,7 @@ def remote_approval(names: list[str], command: str, requester: str):
         "ttl_seconds": 120,
     })
     print("keygrant: no local answer — asking your approver at "
-          "https://keygrant.app/app (2 min window)", file=sys.stderr)
+          "https://app.keygrant.app (2 min window)", file=sys.stderr)
     try:
         r = _poll(lambda: api(state, "GET", f"/approvals/{created['id']}"),
                   lambda r: r["status"] != "pending", timeout=125)

@@ -13,6 +13,9 @@ output is redacted before it returns to the model.
 injection, logs, generated code). The fix is architectural: keys never enter
 context, only the execution environment.
 
+**Docs:** quickstart, every command, and how approvals, redaction and cloud
+sync work: https://keygrant.app/docs/
+
 ## Components
 
 - `keygrant.py` — vault + CLI
@@ -157,7 +160,7 @@ Emergency Kit and your password alone (accounts created before 0.1.4: run
 `keygrant cloud enable-recovery` once on an existing device).
 
 **Approve from your phone** — run `keygrant devices add` and enter the code
-at https://keygrant.app/app on your phone; the same fingerprint check makes
+at https://app.keygrant.app on your phone; the same fingerprint check makes
 that browser a trusted approver. When nobody answers the desktop dialog, the
 request goes to that page instead; an explicit Deny on the desktop is final.
 The browser can approve and see names, never values.
