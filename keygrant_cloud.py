@@ -423,6 +423,36 @@ def cloud_kit() -> int:
     return 0
 
 
+def cloud_delete() -> int:
+    """Destroy the cloud account (all devices, all ciphertext). Local secrets
+    stay in the OS keystore and keep working, as local-only entries."""
+    state = require_account(load_state())
+    account_id = state["account_id"]
+    print("This permanently deletes the cloud account, its ciphertext and every")
+    print("paired device, for ALL your machines. Secrets stay on each machine")
+    print("as local-only entries. This cannot be undone.\n")
+    if ask(f"Type the account ID ({account_id}) to confirm: ") != account_id:
+        print("not confirmed")
+        return 1
+    api(state, "DELETE", "/accounts", {"confirm": account_id})
+    # local teardown: key material out of the keystore, cloud links off records
+    for key in ("device_key", "secret_key", "auk", "vault_key"):
+        if state.get(key):
+            kg.delete_value(state[key])
+    try:
+        os.remove(state_path())
+    except FileNotFoundError:
+        pass
+    vault = kg.load_vault()
+    unlinked = 0
+    for record in vault.values():
+        unlinked += 1 if record.pop("cloud", None) else 0
+    kg.save_vault(vault)
+    print(f"cloud account deleted; {unlinked} local secret(s) kept as local-only")
+    print("other machines keep their local copies but can no longer sync")
+    return 0
+
+
 def cmd_cloud(args: list[str]) -> int:
     sub = args[0] if args else "status"
     if sub == "init":
@@ -433,7 +463,9 @@ def cmd_cloud(args: list[str]) -> int:
         return cloud_enable_recovery()
     if sub == "kit":
         return cloud_kit()
-    print("usage: keygrant cloud init | status | enable-recovery | kit", file=sys.stderr)
+    if sub == "delete":
+        return cloud_delete()
+    print("usage: keygrant cloud init | status | enable-recovery | kit | delete", file=sys.stderr)
     return 2
 
 

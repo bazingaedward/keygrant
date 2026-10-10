@@ -20,7 +20,7 @@ Commands:
                                           entry + CLAUDE.md guidance for agents
   keygrant mcp                           run the MCP server on stdio (same as
                                           keygrant-mcp)
-  keygrant cloud init|status|enable-recovery|kit   zero-knowledge cloud sync
+  keygrant cloud init|status|enable-recovery|kit|delete   zero-knowledge cloud sync
   keygrant devices [add] | pair          (see keygrant_cloud.py; needs
   keygrant sync | push [--delete] NAMES   `keygrant[cloud]`)
   keygrant recover                       join a new device with the emergency
