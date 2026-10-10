@@ -363,12 +363,11 @@ def cloud_init() -> int:
     return 0
 
 
-def unlock(state: dict, password: str) -> None:
-    """Derive the AUK, verify the account key and vault key, cache them."""
+def account_keys(state: dict, auk: bytes, timeout: float = 30):
+    """Fetch and verify the user key pair; returns (private key, K_mac)."""
     nacl = _nacl()
     account_id = state["account_id"]
-    keys = api(state, "GET", "/accounts/keys")
-    auk = derive_auk(password, _secret(state, "secret_key"), account_id)
+    keys = api(state, "GET", "/accounts/keys", timeout=timeout)
     k_enc, k_mac = subkeys(auk)
     user_pub = b64d(keys["user_pubkey"])
     if not mac_ok(k_mac, keys.get("user_pubkey_mac"), "user-pubkey", account_id, user_pub):
@@ -376,18 +375,30 @@ def unlock(state: dict, password: str) -> None:
     user = nacl.public.PrivateKey(unseal(k_enc, keys["enc_user_privkey"], user_key_aad(account_id)))
     if user.public_key.encode() != user_pub:
         raise CloudError("account key pair mismatch; refusing to continue")
+    return user, k_mac
+
+
+def open_vault_key(user, k_mac: bytes, vault: dict) -> bytes:
+    vault_key = _nacl().public.SealedBox(user).decrypt(b64d(vault["enc_vault_key"]))
+    # Sealed boxes are anonymous: anyone with the public key can make one.
+    # The MAC under K_mac proves the vault key came from the account owner.
+    if not mac_ok(k_mac, vault.get("vault_key_mac"), "vault", vault["id"], vault_key):
+        raise CloudError("vault key failed verification — refusing it (possible key substitution)")
+    return vault_key
+
+
+def unlock(state: dict, password: str) -> None:
+    """Derive the AUK, verify the account key and vault key, cache them."""
+    auk = derive_auk(password, _secret(state, "secret_key"), state["account_id"])
+    user, k_mac = account_keys(state, auk)
     vaults = api(state, "GET", "/vaults")["vaults"]
     if not vaults:
         raise CloudError("account has no vault")
     v = vaults[0]
-    vault_key = nacl.public.SealedBox(user).decrypt(b64d(v["enc_vault_key"]))
-    # Sealed boxes are anonymous: anyone with the public key can make one.
-    # The MAC under K_mac proves the vault key came from the account owner.
-    if not mac_ok(k_mac, v.get("vault_key_mac"), "vault", v["id"], vault_key):
-        raise CloudError("vault key failed verification — refusing it (possible key substitution)")
     _store(state, "auk", auk)
-    _store(state, "vault_key", vault_key)
+    _store(state, "vault_key", open_vault_key(user, k_mac, v))
     state["vault_id"] = v["id"]
+    state["vault_key_version"] = v.get("key_version", 1)
     save_state(state)
 
 
@@ -482,13 +493,42 @@ def cmd_devices(args: list[str]) -> int:
         return devices_add()
     if args == ["trust"]:
         return devices_trust()
+    if len(args) == 2 and args[0] == "remove":
+        return devices_remove(args[1])
     if args:
-        print("usage: keygrant devices [add|trust]", file=sys.stderr)
+        print("usage: keygrant devices [add | trust | remove ID]", file=sys.stderr)
         return 2
     state = require_account(load_state())
     for d in api(state, "GET", "/devices")["devices"]:
         mark = "  (this device)" if d["id"] == state["device_id"] else ""
-        print(f"{fingerprint(b64d(d['pubkey']))}  {d['name']}  {d['id']}{mark}")
+        print(f"{fingerprint(b64d(d['pubkey']))}  {d.get('kind', 'cli'):7}  {d['name']}  {d['id']}{mark}")
+    return 0
+
+
+def devices_remove(id_prefix: str) -> int:
+    """Revoke a lost or retired device (an id prefix is enough if unique)."""
+    state = require_account(load_state())
+    matches = [d for d in api(state, "GET", "/devices")["devices"] if d["id"].startswith(id_prefix)]
+    if len(matches) != 1:
+        raise CloudError(f"{'no' if not matches else 'more than one'} device matches '{id_prefix}'")
+    d = matches[0]
+    me = d["id"] == state["device_id"]
+    print(f"\nRemove {d.get('kind', 'cli')} device '{d['name']}' "
+          f"(fingerprint {fingerprint(b64d(d['pubkey']))}){' — THIS device' if me else ''}?")
+    print("Secrets it already synced stay on that machine: rotate the real API")
+    print("keys at each provider if it was lost or stolen.\n")
+    if ask("Type 'remove' to confirm: ") != "remove":
+        print("not removed")
+        return 1
+    r = api(state, "DELETE", f"/devices/{d['id']}")
+    (state.get("approvers") or {}).pop(d["id"], None)
+    save_state(state)
+    print(f"removed '{d['name']}'")
+    if me:
+        print("this device is no longer part of the account")
+        return 0
+    if r.get("key_rotation_pending") and state.get("vault_key"):
+        rotate_vault_key(state)  # don't wait for the next sync to re-key
     return 0
 
 
@@ -573,6 +613,14 @@ def remote_approval(names: list[str], command: str, requester: str):
     approvers = state.get("approvers") or {}
     if not state.get("account_id") or not approvers:
         return None
+    # forget approvers revoked from another device since we trusted them
+    live = {d["id"] for d in api(state, "GET", "/devices")["devices"]}
+    if stale := [a for a in approvers if a not in live]:
+        for a in stale:
+            approvers.pop(a)
+        save_state(state)
+        if not approvers:
+            return None
     command_hash = approval_request_hash(requester, names, command)
     created = api(state, "POST", "/approvals", {
         "names": names, "command_preview": command,
@@ -665,7 +713,56 @@ def cmd_sync(_args: list[str]) -> int:
     return 0
 
 
+def refresh_vault_key(state: dict, timeout: float = 30) -> None:
+    """Follow vault key rotations: reload the key another device rotated in,
+    or perform a pending rotation (a cli device was revoked) ourselves."""
+    vid = state["vault_id"]
+    v = next((v for v in api(state, "GET", "/vaults", timeout=timeout)["vaults"]
+              if v["id"] == vid), None)
+    if v is None:
+        raise CloudError("vault not found on the server")
+    if v.get("key_version", 1) != state.get("vault_key_version", 1):
+        user, k_mac = account_keys(state, _secret(state, "auk"), timeout)
+        _store(state, "vault_key", open_vault_key(user, k_mac, v))
+        state["vault_key_version"] = v.get("key_version", 1)
+        save_state(state)
+    if v.get("key_rotation_pending"):
+        rotate_vault_key(state, timeout)
+
+
+def rotate_vault_key(state: dict, timeout: float = 30) -> None:
+    """Re-key the vault after a cli device was revoked: it may hold the old
+    vault key. Every item is re-encrypted (same rev) and submitted at once;
+    the server refuses a stale or partial set, and we retry on next sync."""
+    nacl = _nacl()
+    vid, old_key = state["vault_id"], _secret(state, "vault_key")
+    user, k_mac = account_keys(state, _secret(state, "auk"), timeout)
+    items = api(state, "GET", f"/vaults/{vid}/items?since_seq=0", timeout=timeout)["items"]
+    new_key = os.urandom(32)
+    rekeyed = []
+    for it in items:
+        aad = item_aad(vid, it["id"], it["name"], it["rev"])
+        rekeyed.append({"id": it["id"], "rev": it["rev"],
+                        "enc": seal(new_key, unseal(old_key, it["enc"], aad), aad)})
+    try:
+        r = api(state, "POST", f"/vaults/{vid}/rotate", {
+            "enc_vault_key": b64e(nacl.public.SealedBox(user.public_key).encrypt(new_key)),
+            "vault_key_mac": mac(k_mac, "vault", vid, new_key),
+            "items": rekeyed,
+        }, timeout=timeout)
+    except CloudError as exc:
+        if exc.status == 409:
+            return  # raced a push; the flag stays set and the next sync retries
+        raise
+    _store(state, "vault_key", new_key)
+    state["vault_key_version"] = r["key_version"]
+    save_state(state)
+    print(f"keygrant: rotated the vault key ({len(rekeyed)} item(s)) after a device "
+          "was revoked", file=sys.stderr)
+
+
 def pull(state: dict, timeout: float = 30) -> tuple[int, int, int]:
+    refresh_vault_key(state, timeout)
     vid, vault_key = state["vault_id"], _secret(state, "vault_key")
     known = state.setdefault("items", {})
     cursor = state.get("cursor", 0)

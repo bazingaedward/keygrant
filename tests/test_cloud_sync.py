@@ -32,6 +32,8 @@ class SyncRules(unittest.TestCase):
             mock.patch.object(kg, "decrypt_value", lambda r: self.store[r["k"]]),
             mock.patch.object(kg, "delete_value", lambda r: self.store.pop(r["k"], None)),
             mock.patch("builtins.print"),
+            # key rotation has its own tests; these cover merge rules
+            mock.patch.object(kc, "refresh_vault_key", lambda *a, **k: None),
         ]
         for p in patches:
             p.start()
@@ -130,7 +132,7 @@ class SyncRules(unittest.TestCase):
         self.set_local("K", "mine")
         sent = {}
 
-        def fake_api(_state, method, path, body=None):
+        def fake_api(_state, method, path, body=None, **_kw):
             sent.update(body)
             return {"rev": 2, "seq": 9}
 

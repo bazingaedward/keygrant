@@ -103,7 +103,7 @@ class Unlock(unittest.TestCase):
     def _unlock(self, password):
         state = {"account_id": self.account, "secret_key": self._enc(kc.b64e(self.sk))}
 
-        def fake_api(_state, method, path, body=None):
+        def fake_api(_state, method, path, body=None, **_kw):
             return self.keys if path == "/accounts/keys" else {"vaults": [self.vault]}
 
         with mock.patch.object(kc, "api", fake_api):
