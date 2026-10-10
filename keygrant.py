@@ -207,6 +207,26 @@ def save_vault(vault: dict) -> None:
 
 # ---------- redaction ----------
 
+def _b64_cores(data: bytes) -> list[str]:
+    """Base64 of `data` as it appears inside a larger encoded stream.
+
+    Base64 works in 3-byte groups, so the same secret encodes differently
+    depending on how many bytes precede it ("Bearer " + key is 7 bytes off).
+    For each of the 3 alignments, keep only the characters that depend on
+    the secret alone: the edge characters that mix in neighbouring bytes are
+    dropped (they carry a few bits at most, never the secret).
+    """
+    cores = []
+    for offset in range(3):
+        enc = base64.b64encode(b"\0" * offset + data).decode().rstrip("=")
+        start = (0, 2, 3)[offset]
+        end = len(enc) - (1 if (offset + len(data)) % 3 else 0)
+        core = enc[start:end]
+        if len(core) >= 8:  # too short to match without false positives
+            cores.append(core)
+    return cores
+
+
 def _variants(name: str, value: str) -> list[tuple[str, str]]:
     """Encodings of a secret value an agent might emit to evade plain matching."""
     b64 = base64.b64encode(value.encode()).decode()
@@ -218,6 +238,9 @@ def _variants(name: str, value: str) -> list[tuple[str, str]]:
         (value.encode().hex().upper(), f"{name}:hex"),
         (urllib.parse.quote(value, safe=""), f"{name}:urlencoded"),
     ]
+    for core in _b64_cores(value.encode()):
+        variants.append((core, f"{name}:base64"))
+        variants.append((core.translate(str.maketrans("+/", "-_")), f"{name}:base64url"))
     seen: set[str] = set()
     out = []
     for v, label in variants:
