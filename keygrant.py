@@ -20,7 +20,7 @@ Commands:
                                           entry + CLAUDE.md guidance for agents
   keygrant mcp                           run the MCP server on stdio (same as
                                           keygrant-mcp)
-  keygrant cloud init|status|enable-recovery|kit|delete   zero-knowledge cloud sync
+  keygrant cloud init|status|enable-recovery|kit|delete|audit   zero-knowledge cloud sync
   keygrant devices [add|remove] | pair          (see keygrant_cloud.py; needs
   keygrant sync | push [--delete] NAMES   `keygrant[cloud]`)
   keygrant recover                       join a new device with the emergency
@@ -33,6 +33,7 @@ Timeout = deny.
 """
 
 import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -360,6 +361,37 @@ def _approval_dialog(names: list[str], command: str, timeout_ms: int) -> str:
     return "timeout"  # no local channel; remote approval or deny
 
 
+def current_requester() -> str:
+    """Who is asking: the MCP server labels its agent session ("mcp:<pid>");
+    a bare CLI call falls back to its parent process. Shown to remote
+    approvers and recorded in the audit log."""
+    return os.environ.get("KEYGRANT_REQUESTER") or f"cli:ppid:{os.getppid()}"
+
+
+def record_event(action: str, names: list[str], command: str | None = None) -> None:
+    """Queue audit events for upload on the next cloud sync — names and a
+    command hash, never values (the "full" tier adds the command text).
+    A no-op without a cloud account or with auditing off, and never allowed
+    to break the command that triggered it."""
+    try:
+        with open(os.path.join(VAULT_DIR, "cloud.json"), encoding="utf-8") as f:
+            cloud = json.load(f)
+        tier = cloud.get("audit", "metadata")
+        if not cloud.get("account_id") or tier == "off":
+            return
+        event = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                 "action": action, "requester": current_requester()}
+        if command is not None:
+            event["command_hash"] = "sha256:" + hashlib.sha256(command.encode()).hexdigest()
+            if tier == "full":
+                event["command_preview"] = command[:2000]
+        with open(os.path.join(VAULT_DIR, "audit-outbox.jsonl"), "a", encoding="utf-8") as f:
+            for name in names:
+                f.write(json.dumps({**event, "name": name}) + "\n")
+    except Exception:
+        pass
+
+
 def _remote_approval(names: list[str], command: str):
     """Escalate to the web approver console. True allowed, False denied,
     or a string/None explaining why remote approval was unavailable."""
@@ -393,18 +425,22 @@ def request_approval(names: list[str], command: str,
     timeout_ms = int(os.environ.get("KEYGRANT_APPROVAL_TIMEOUT_MS", "60000"))
     decision = _approval_dialog(pending, command, timeout_ms)
     if decision == "deny":
+        record_event("denied", pending, command)
         return False, f"user denied access to: {', '.join(pending)}"
     if decision == "timeout":
         remote = _remote_approval(pending, command)
         if remote is False:
+            record_event("denied", pending, command)
             return False, f"denied by the remote approver: {', '.join(pending)}"
         if remote is not True:
+            record_event("denied", pending, command)
             why = f"; remote approval unavailable: {remote}" if remote else ""
             return False, (
                 f"user denied access to: {', '.join(pending)} "
                 f"(approval dialog timed out{why})"
             )
         # remote allow falls through to grant
+    record_event("grant", pending, command)
     if store is not None:
         store.add(pending, command)
     return True, ""
@@ -441,6 +477,7 @@ def cmd_set(args: list[str]) -> int:
         record["cloud"] = {**old["cloud"], "dirty": True}
     vault[name] = record
     save_vault(vault)
+    record_event("set", [name])
     print(f"stored: {name}")
     return 0
 
@@ -477,6 +514,7 @@ def cmd_rm(args: list[str]) -> int:
     delete_value(vault[args[0]])
     del vault[args[0]]
     save_vault(vault)
+    record_event("rm", [args[0]])
     print(f"removed: {args[0]}")
     return 0
 
@@ -519,6 +557,7 @@ def cmd_exec(args: list[str]) -> int:
         vault[name]["last_used"] = now
         vault[name]["use_count"] = vault[name].get("use_count", 0) + 1
     save_vault(vault)
+    record_event("exec", names, subprocess.list2cmdline(command))
 
     env = os.environ.copy()
     env.update(secrets)
@@ -547,6 +586,7 @@ def cmd_revoke(args: list[str]) -> int:
         revocations = {}  # rewrite an unreadable file
     revocations[key] = time.time()
     save_revocations(revocations)
+    record_event("revoke", [key])
     print(f"revoked: {'all grants' if key == '*' else key} "
           "(grants issued before now are void in every session)")
     return 0

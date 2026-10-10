@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from keygrant import (  # noqa: E402
     GrantStore, load_vault, save_vault, decrypt_value, request_approval, redact,
+    record_event,
 )
 
 # One MCP server process = one agent session. Its grants live only here, in
@@ -124,6 +125,7 @@ def tool_exec_with_secrets(args: dict) -> str:
         vault[name]["last_used"] = now
         vault[name]["use_count"] = vault[name].get("use_count", 0) + 1
     save_vault(vault)
+    record_event("exec", names, command)
 
     env = os.environ.copy()
     env.update(secrets)
@@ -206,6 +208,8 @@ def handle(msg: dict):
 
 
 def main() -> None:
+    # one server process = one agent session; label it for approvers and audit
+    os.environ.setdefault("KEYGRANT_REQUESTER", f"mcp:{os.getpid()}")
     for line in sys.stdin:
         line = line.strip().lstrip("﻿")
         if not line:

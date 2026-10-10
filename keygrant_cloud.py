@@ -482,8 +482,33 @@ def cmd_cloud(args: list[str]) -> int:
         return cloud_kit()
     if sub == "delete":
         return cloud_delete()
-    print("usage: keygrant cloud init | status | enable-recovery | kit | delete", file=sys.stderr)
+    if sub == "audit":
+        return cloud_audit(args[1:])
+    print("usage: keygrant cloud init | status | enable-recovery | kit | delete | audit",
+          file=sys.stderr)
     return 2
+
+
+AUDIT_TIERS = {
+    "off": "nothing is uploaded",
+    "metadata": "secret names, action, requester and a command hash (default)",
+    "full": "metadata plus the full command text",
+}
+
+
+def cloud_audit(args: list[str]) -> int:
+    state = require_account(load_state())
+    if not args:
+        tier = state.get("audit", "metadata")
+        print(f"audit: {tier} — {AUDIT_TIERS[tier]}")
+        return 0
+    if len(args) != 1 or args[0] not in AUDIT_TIERS:
+        print("usage: keygrant cloud audit [off|metadata|full]", file=sys.stderr)
+        return 2
+    state["audit"] = args[0]
+    save_state(state)
+    print(f"audit: {args[0]} — {AUDIT_TIERS[args[0]]}")
+    return 0
 
 
 # ---------- devices & pairing ----------
@@ -823,7 +848,39 @@ def pull(state: dict, timeout: float = 30) -> tuple[int, int, int]:
     state["cursor"] = cursor
     state["last_sync"] = time.time()
     save_state(state)
+    try:
+        flush_audit(state, timeout)
+    except CloudError as exc:
+        print(f"warning: audit upload failed, will retry: {exc}", file=sys.stderr)
     return pulled, removed, skipped
+
+
+def flush_audit(state: dict, timeout: float = 30) -> int:
+    """Upload queued audit events. The outbox is renamed before reading so
+    commands can keep appending; a partial failure keeps only what is left."""
+    outbox = os.path.join(kg.VAULT_DIR, "audit-outbox.jsonl")
+    sending = outbox + ".sending"
+    if not os.path.exists(sending):
+        try:
+            os.replace(outbox, sending)
+        except FileNotFoundError:
+            return 0
+    with open(sending, encoding="utf-8") as f:
+        events = []
+        for line in f:
+            try:
+                events.append(json.loads(line))
+            except ValueError:
+                pass  # a torn line from a crash; drop it
+    sent = 0
+    while events:
+        batch, events = events[:100], events[100:]
+        api(state, "POST", "/events", {"events": batch}, timeout=timeout)
+        sent += len(batch)
+        with open(sending, "w", encoding="utf-8") as f:
+            f.writelines(json.dumps(e) + "\n" for e in events)
+    os.remove(sending)
+    return sent
 
 
 def cmd_push(args: list[str]) -> int:
