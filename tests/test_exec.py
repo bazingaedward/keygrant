@@ -56,7 +56,8 @@ class CliExec(ExecTestCase):
         # wrangler prints emoji; a GBK console can't encode them
         raw = io.BytesIO()
         console = io.TextIOWrapper(raw, encoding="gbk", newline="\n")
-        child = "import sys; sys.stdout.buffer.write('⛅ ok 中\\n'.encode())"
+        # escaped: on POSIX argv is encoded with the locale, and GBK has no ⛅
+        child = "import sys; sys.stdout.buffer.write('\\u26c5 ok 中\\n'.encode())"
         with mock.patch.object(sys, "stdout", console):
             code = keygrant.cmd_exec(["--redact", "K", "--", sys.executable, "-c", child])
             console.flush()
