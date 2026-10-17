@@ -42,7 +42,7 @@ there's no per-project setup. It needs [uv](https://docs.astral.sh/uv/).
 /plugin install keygrant@keygrant
 ```
 
-Add secrets from your terminal with `uvx keygrant==0.1.7 set NAME`, or install
+Add secrets from your terminal with `uvx keygrant==0.1.8 set NAME`, or install
 the CLI as below.
 
 ### As a CLI and MCP server

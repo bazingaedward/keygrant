@@ -1,7 +1,7 @@
 {
   "name": "keygrant",
   "displayName": "keygrant",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Secrets for AI coding agents: the model sees secret names, values are injected only into the command that needs them, and you approve every command in a native dialog.",
   "author": {
     "name": "Edward Qiu",
