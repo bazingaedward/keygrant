@@ -52,6 +52,17 @@ class CliExec(ExecTestCase):
         self.assertNotIn(SECRET[1:], out.getvalue())
         self.assertEqual(out.getvalue(), "plain [K:REDACTED] 中[K:REDACTED]\n")
 
+    def test_output_a_gbk_console_cannot_encode_is_replaced(self):
+        # wrangler prints emoji; a GBK console can't encode them
+        raw = io.BytesIO()
+        console = io.TextIOWrapper(raw, encoding="gbk", newline="\n")
+        child = "import sys; sys.stdout.buffer.write('⛅ ok 中\\n'.encode())"
+        with mock.patch.object(sys, "stdout", console):
+            code = keygrant.cmd_exec(["--redact", "K", "--", sys.executable, "-c", child])
+            console.flush()
+        self.assertEqual(code, 0)
+        self.assertEqual(raw.getvalue().decode("gbk"), "? ok 中\n")
+
 
 class McpExec(ExecTestCase):
     def test_tool_masks_output(self):

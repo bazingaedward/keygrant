@@ -695,10 +695,19 @@ def cmd_exec(args: list[str]) -> int:
     out = redact_output(proc.stdout, secrets)
     err = redact_output(proc.stderr, secrets)
     if out:
-        sys.stdout.write(out)
+        _write(sys.stdout, out)
     if err:
-        sys.stderr.write(err)
+        _write(sys.stderr, err)
     return proc.returncode
+
+
+def _write(stream, text: str) -> None:
+    """Write text a GBK console can't encode (emoji) as '?' instead of raising."""
+    try:
+        stream.write(text)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        stream.write(text.encode(encoding, errors="replace").decode(encoding))
 
 
 def cmd_revoke(args: list[str]) -> int:
