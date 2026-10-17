@@ -645,9 +645,9 @@ def cmd_rm(args: list[str]) -> int:
 
 
 def cmd_exec(args: list[str]) -> int:
-    redact_output = False
+    redacting = False
     if args and args[0] == "--redact":
-        redact_output = True
+        redacting = True
         args = args[1:]
     if "--" not in args or args.index("--") == 0:
         print("usage: keygrant exec [--redact] NAME[,NAME...] -- COMMAND [ARGS...]",
@@ -687,7 +687,7 @@ def cmd_exec(args: list[str]) -> int:
     env = os.environ.copy()
     env.update(secrets)
 
-    if not redact_output:
+    if not redacting:
         proc = subprocess.run(command, env=env)
         return proc.returncode
 
