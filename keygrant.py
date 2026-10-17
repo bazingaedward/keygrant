@@ -35,6 +35,7 @@ Timeout = deny.
 import base64
 import hashlib
 import json
+import locale
 import os
 import shutil
 import subprocess
@@ -330,6 +331,32 @@ def redact(text: str, secrets: dict[str, str]) -> str:
         for variant, label in _variants(name, value):
             text = text.replace(variant, f"[{label}:REDACTED]")
     return text
+
+
+def redact_output(data: bytes | None, secrets: dict[str, str]) -> str:
+    """Redact raw process output, then decode it.
+
+    Matching happens on bytes first: decoding UTF-8 output as GBK (the
+    default on Chinese Windows) can glue a stray lead byte onto the first
+    character of a secret, so a text-level match would miss the rest of it.
+    Output is decoded as UTF-8, falling back to the locale encoding, and
+    redacted once more as text.
+    """
+    data = data or b""
+    encodings = ["utf-8", locale.getpreferredencoding(False)]
+    for name, value in secrets.items():
+        for variant, label in _variants(name, value):
+            marker = f"[{label}:REDACTED]".encode()
+            for enc in encodings:
+                try:
+                    data = data.replace(variant.encode(enc), marker)
+                except (UnicodeEncodeError, LookupError):
+                    pass
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = data.decode(encodings[1], errors="replace")
+    return redact(text, secrets)
 
 
 # ---------- approval ----------
@@ -664,9 +691,9 @@ def cmd_exec(args: list[str]) -> int:
         proc = subprocess.run(command, env=env)
         return proc.returncode
 
-    proc = subprocess.run(command, env=env, capture_output=True, text=True)
-    out = redact(proc.stdout, secrets)
-    err = redact(proc.stderr, secrets)
+    proc = subprocess.run(command, env=env, capture_output=True)
+    out = redact_output(proc.stdout, secrets)
+    err = redact_output(proc.stderr, secrets)
     if out:
         sys.stdout.write(out)
     if err:

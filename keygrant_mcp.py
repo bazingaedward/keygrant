@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from keygrant import (  # noqa: E402
-    GrantStore, load_vault, save_vault, decrypt_value, request_approval, redact,
+    GrantStore, load_vault, save_vault, decrypt_value, request_approval, redact_output,
     record_event, migrate_legacy_vault,
 )
 
@@ -134,13 +134,11 @@ def tool_exec_with_secrets(args: dict) -> str:
         env=env,
         cwd=args.get("cwd") or None,
         capture_output=True,
-        text=True,
-        errors="replace",
         timeout=120,
     )
 
-    out = redact(proc.stdout or "", secrets)
-    err = redact(proc.stderr or "", secrets)
+    out = redact_output(proc.stdout, secrets)
+    err = redact_output(proc.stderr, secrets)
 
     parts = [f"exit code: {proc.returncode}"]
     if out.strip():
