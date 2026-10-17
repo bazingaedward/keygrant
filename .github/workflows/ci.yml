@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_call:  # release.yml runs the same tests before publishing
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python }}${{ matrix.locale && format(', {0}', matrix.locale) || '' }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.13"]
+        include:
+          # Chinese-Windows-style console: preferred encoding GBK, not UTF-8.
+          # (windows-latest itself runs with cp1252, also not UTF-8.)
+          - os: ubuntu-latest
+            python: "3.13"
+            locale: zh_CN.GBK
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest "pynacl>=1.5"
+      - name: Switch to a GBK locale
+        if: matrix.locale == 'zh_CN.GBK'
+        run: |
+          test -f /usr/share/i18n/locales/zh_CN || sudo apt-get install -y locales
+          sudo localedef -i zh_CN -c -f GBK zh_CN.GBK
+          {
+            echo "LANG=zh_CN.GBK"
+            echo "LC_ALL=zh_CN.GBK"
+            echo "PYTHONUTF8=0"
+            echo "PYTHONCOERCECLOCALE=0"
+          } >> "$GITHUB_ENV"
+      - name: Show encodings
+        run: python -c "import locale, sys; print(locale.getpreferredencoding(False), sys.stdout.encoding, sys.flags.utf8_mode)"
+      - name: Assert GBK is in effect
+        if: matrix.locale == 'zh_CN.GBK'
+        run: python -c "import locale; e = locale.getpreferredencoding(False); assert e.lower() in ('gbk', 'gb2312', 'cp936'), e"
+      - run: python -m pytest tests/ -q

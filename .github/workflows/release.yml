@@ -1,0 +1,171 @@
+# Release keygrant: push a tag vX.Y.Z on a master commit whose version is already X.Y.Z
+# (python scripts/bump_version.py X.Y.Z). See docs/releasing.md for the one-time setup.
+#
+#   verify -> test -> build -> pypi (approval) -> pypi-live -> mcp-registry
+#                                                            -> plugin-pins (opens a PR)
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  MCP_PUBLISHER_VERSION: "1.8.1"
+  # sha256 of mcp-publisher_linux_amd64.tar.gz, from registry_<ver>_checksums.txt
+  MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: v
+        name: Tag matches the version in the code, on master, not yet on PyPI
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python3 scripts/bump_version.py --check "$version"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master \
+            || { echo "::error::$GITHUB_REF_NAME is not on master"; exit 1; }
+          status=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/keygrant/$version/json")
+          [ "$status" = 404 ] || { echo "::error::keygrant $version already on PyPI (HTTP $status)"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: [verify, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - run: uv build --out-dir dist
+      - run: python3 scripts/check_dist.py dist "${{ needs.verify.outputs.version }}"
+      - run: uvx twine check --strict dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi  # protected: needs the owner's approval; also named in PyPI's trusted publisher
+      url: https://pypi.org/project/keygrant/${{ needs.verify.outputs.version }}/
+    permissions:
+      id-token: write  # Trusted Publishing (OIDC), no token stored anywhere
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  pypi-live:
+    needs: [verify, pypi]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - name: Wait for the version endpoint
+        run: |
+          for i in $(seq 1 60); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/keygrant/$VERSION/json")
+            [ "$status" = 200 ] && exit 0
+            echo "attempt $i: HTTP $status"; sleep 10
+          done
+          echo "::error::keygrant $VERSION not on PyPI after 10 minutes"; exit 1
+      - uses: astral-sh/setup-uv@v7
+      - name: Install from PyPI and start the MCP server
+        run: |
+          export HOME="$RUNNER_TEMP/home"; mkdir -p "$HOME"
+          # the JSON API can be ahead of the simple index uv installs from
+          for i in $(seq 1 30); do
+            uv run --no-project --isolated --refresh --with "keygrant==$VERSION" \
+              python -c "import importlib.metadata as m; print('installed', m.version('keygrant'))" && break
+            [ "$i" = 30 ] && { echo "::error::keygrant==$VERSION not installable"; exit 1; }
+            echo "attempt $i: not installable yet"; sleep 10
+          done
+          init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}'
+          reply=$(echo "$init" | uvx --from "keygrant==$VERSION" keygrant mcp)
+          echo "$reply"
+          echo "$reply" | grep -F "\"serverInfo\": {\"name\": \"keygrant\", \"version\": \"$VERSION\"}"
+
+  mcp-registry:
+    needs: [verify, pypi-live]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # mcp-publisher login github-oidc -> io.github.bazingaedward/*
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v$MCP_PUBLISHER_VERSION/mcp-publisher_linux_amd64.tar.gz"
+          echo "$MCP_PUBLISHER_SHA256  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
+      - name: Registry lists this version as latest
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          curl -fsS "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.bazingaedward/keygrant" -o servers.json
+          python3 - <<'EOF'
+          import json, os
+          want = os.environ["VERSION"]
+          for s in json.load(open("servers.json"))["servers"]:
+              meta = s.get("_meta", {}).get("io.modelcontextprotocol.registry/official", {})
+              if s["server"]["version"] == want and meta.get("isLatest"):
+                  print("registry: keygrant", want, "isLatest"); break
+          else:
+              raise SystemExit(f"::error::registry does not list {want} as latest")
+          EOF
+
+  plugin-pins:
+    needs: [verify, pypi-live]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      BRANCH: release/plugin-pins-v${{ needs.verify.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: master
+      - run: python3 scripts/bump_version.py --pins "$VERSION"
+      - name: Open the pin PR
+        run: |
+          if git diff --quiet; then echo "pins already at $VERSION"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git commit -am "Plugin: pin keygrant==$VERSION"
+          git push -u origin "$BRANCH"
+          gh pr create --base master --head "$BRANCH" \
+            --title "Plugin: pin keygrant==$VERSION" \
+            --body "keygrant $VERSION is live on PyPI (https://pypi.org/project/keygrant/$VERSION/), so the plugin can point at it.
+
+          Merging pushes to master, which the Claude plugin directory picks up. Before merging:
+          - [ ] \`claude plugin validate ./plugin --strict\`
+          - [ ] \`claude plugin validate . --strict\`
+
+          (Opened by the release workflow; PRs created with GITHUB_TOKEN do not trigger CI.)"
