@@ -116,7 +116,14 @@ app with toast notifications; the grant semantics stay the same.
 ## Storage
 
 - **Windows**: values DPAPI-encrypted (per-user) inside
-  `%APPDATA%\keygrant\vault.json`
+  `%USERPROFILE%\.keygrant\vault.json`. Not `%APPDATA%`: packaged apps such as
+  the Claude desktop app see a private copy of `%APPDATA%`, so the MCP server
+  they launch and the CLI in a normal terminal would read different vaults.
+  Up to 0.1.6 the vault lived in `%APPDATA%\keygrant\`. The CLI and the MCP
+  server merge it into the new home on every start: only names the new vault
+  has never seen from the old one, never overwriting, so a secret you delete
+  does not come back. The old files stay, so a 0.1.6 install keeps working
+  while you upgrade.
 - **macOS**: values in the login Keychain (via the `security` CLI; the first
   read triggers the OS Keychain permission prompt — an extra OS-level gate);
   `~/.config/keygrant/vault.json` holds metadata only
@@ -125,7 +132,8 @@ app with toast notifications; the grant semantics stay the same.
   the vault file holds metadata only
 
 The vault file also records usage metadata (use count, last used) as the seed
-of an audit trail.
+of an audit trail. Set `KEYGRANT_HOME` to keep the vault somewhere else on any
+platform.
 
 ## Cloud sync (preview)
 

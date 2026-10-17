@@ -2,7 +2,7 @@
 """keygrant — per-command secret injection for AI coding agents (prototype).
 
 Secrets are stored in an OS-native keystore: DPAPI-encrypted values inside
-%APPDATA%\\keygrant\\vault.json on Windows; the login Keychain on macOS; the
+%USERPROFILE%\\.keygrant\\vault.json on Windows; the login Keychain on macOS; the
 Secret Service keyring via secret-tool on Linux (the vault file then holds
 only metadata). The agent's model context only ever sees
 secret NAMES; values are decrypted at exec time and injected into the child
@@ -36,6 +36,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -47,13 +48,22 @@ IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 IS_LINUX = sys.platform.startswith("linux")
 
-if IS_WIN:
-    _config_root = os.environ["APPDATA"]
-else:
-    _config_root = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
-        os.path.expanduser("~"), ".config")
+def _default_vault_dir() -> str:
+    if os.environ.get("KEYGRANT_HOME"):
+        return os.environ["KEYGRANT_HOME"]
+    if IS_WIN:
+        # Not %APPDATA%: packaged (MSIX) apps such as the Claude desktop app get a
+        # private copy of %APPDATA%, so the MCP server they launch and the CLI in a
+        # normal terminal would read different vaults. The profile root is shared.
+        return os.path.join(os.path.expanduser("~"), ".keygrant")
+    return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+        os.path.expanduser("~"), ".config"), "keygrant")
 
-VAULT_DIR = os.path.join(_config_root, "keygrant")
+
+VAULT_DIR = _default_vault_dir()
+# Where Windows vaults lived up to 0.1.6; merged into VAULT_DIR by migrate_legacy_vault().
+LEGACY_VAULT_DIR = (os.path.join(os.environ["APPDATA"], "keygrant")
+                    if IS_WIN and not os.environ.get("KEYGRANT_HOME") else None)
 VAULT_PATH = os.path.join(VAULT_DIR, "vault.json")
 REVOCATIONS_PATH = os.path.join(VAULT_DIR, "revocations.json")
 GRANT_TTL_SECONDS = 15 * 60
@@ -203,6 +213,71 @@ def save_vault(vault: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"version": VAULT_FORMAT_VERSION, "secrets": vault}, f, indent=2)
     os.replace(tmp, VAULT_PATH)
+
+
+def migrate_legacy_vault() -> None:
+    """Merge the pre-0.1.7 Windows vault (%APPDATA%\\keygrant) into VAULT_DIR.
+
+    Runs on every CLI and MCP start and is cheap when there is nothing new. The old
+    files are left in place so a 0.1.6 install keeps working during the upgrade.
+    Each run adds only names the new vault has never seen from the old one, so a
+    secret deleted in the new vault does not come back, while one stored later by
+    an old install is still picked up. A packaged app and a normal terminal may each
+    see their own copy of %APPDATA%; running from both sides merges both."""
+    if not LEGACY_VAULT_DIR or (os.path.normcase(os.path.abspath(LEGACY_VAULT_DIR))
+                                == os.path.normcase(os.path.abspath(VAULT_DIR))):
+        return
+    legacy = os.path.join(LEGACY_VAULT_DIR, "vault.json")
+    if not os.path.exists(legacy):
+        return
+    try:
+        with open(legacy, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"keygrant: could not read the old vault {legacy}: {e}", file=sys.stderr)
+        return
+    old = data.get("secrets", {}) if isinstance(data.get("version"), int) else data
+
+    seen_path = os.path.join(VAULT_DIR, "legacy-merged.json")
+    try:
+        with open(seen_path, encoding="utf-8") as f:
+            seen = set(json.load(f).get("names", []))
+    except (OSError, ValueError, AttributeError):
+        seen = set()
+    vault = load_vault()
+    added = [name for name in old if name not in vault and name not in seen]
+    if added:
+        vault.update({name: old[name] for name in added})
+        save_vault(vault)
+    if not set(old) <= seen:
+        os.makedirs(VAULT_DIR, exist_ok=True)
+        with open(seen_path, "w", encoding="utf-8") as f:
+            json.dump({"names": sorted(seen | set(old))}, f, indent=2)
+
+    # Keep the latest revocation per name, so a revoke issued on either side holds.
+    try:
+        with open(os.path.join(LEGACY_VAULT_DIR, "revocations.json"), encoding="utf-8") as f:
+            old_revs = json.load(f)
+    except (OSError, ValueError):
+        old_revs = {}
+    if isinstance(old_revs, dict):
+        revs = load_revocations() if os.path.exists(REVOCATIONS_PATH) else {}
+        newer = {name: at for name, at in old_revs.items()
+                 if isinstance(at, (int, float)) and at > revs.get(name, 0)}
+        if newer:
+            save_revocations({**revs, **newer})
+
+    # Cloud identity, audit outbox and the like: copy what the new home lacks.
+    for fname in os.listdir(LEGACY_VAULT_DIR):
+        src, dst = os.path.join(LEGACY_VAULT_DIR, fname), os.path.join(VAULT_DIR, fname)
+        if (fname not in ("vault.json", "revocations.json") and not fname.endswith(".tmp")
+                and os.path.isfile(src) and not os.path.exists(dst)):
+            os.makedirs(VAULT_DIR, exist_ok=True)
+            shutil.copy2(src, dst)
+
+    if added:
+        print(f"keygrant: merged {', '.join(added)} from the old vault into {VAULT_DIR}",
+              file=sys.stderr)
 
 
 # ---------- redaction ----------
@@ -682,6 +757,7 @@ def main() -> int:
         print(__doc__.strip(), file=sys.stderr)
         return 2
     cmd, args = sys.argv[1], sys.argv[2:]
+    migrate_legacy_vault()
     handlers = {"set": cmd_set, "list": cmd_list, "rm": cmd_rm,
                 "exec": cmd_exec, "revoke": cmd_revoke, "init": cmd_init,
                 "mcp": cmd_mcp}

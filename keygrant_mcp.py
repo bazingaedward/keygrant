@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from keygrant import (  # noqa: E402
     GrantStore, load_vault, save_vault, decrypt_value, request_approval, redact,
-    record_event,
+    record_event, migrate_legacy_vault,
 )
 
 # One MCP server process = one agent session. Its grants live only here, in
@@ -210,6 +210,7 @@ def handle(msg: dict):
 def main() -> None:
     # one server process = one agent session; label it for approvers and audit
     os.environ.setdefault("KEYGRANT_REQUESTER", f"mcp:{os.getpid()}")
+    migrate_legacy_vault()
     for line in sys.stdin:
         line = line.strip().lstrip("﻿")
         if not line:
