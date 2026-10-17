@@ -2,7 +2,7 @@
   "mcpServers": {
     "keygrant": {
       "command": "uvx",
-      "args": ["keygrant==0.1.6", "mcp"]
+      "args": ["keygrant==0.1.7", "mcp"]
     }
   }
 }
