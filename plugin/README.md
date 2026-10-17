@@ -32,7 +32,7 @@ Values go in from your own terminal, never through the chat. The value is read
 from stdin:
 
 ```bash
-uvx keygrant==0.1.8 set STRIPE_KEY --desc "stripe, test mode"
+uvx keygrant==0.1.9 set STRIPE_KEY --desc "stripe, test mode"
 ```
 
 Then ask Claude, for example: "List the five most recent Stripe charges using
@@ -40,8 +40,8 @@ STRIPE_KEY." Approve the command in the dialog that appears.
 
 ## What it runs, stores, and sends
 
-- **Runs:** `uvx keygrant==0.1.8 mcp`, which downloads the `keygrant` package,
-  version 0.1.8, from PyPI the first time and runs it locally as a stdio MCP
+- **Runs:** `uvx keygrant==0.1.9 mcp`, which downloads the `keygrant` package,
+  version 0.1.9, from PyPI the first time and runs it locally as a stdio MCP
   server. Source: https://github.com/bazingaedward/keygrant
 - **Stores:** secret values in your operating system's credential store (DPAPI on
   Windows, the login Keychain on macOS, Secret Service on Linux), plus metadata

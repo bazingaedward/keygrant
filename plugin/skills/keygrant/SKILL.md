@@ -36,7 +36,7 @@ their own terminal, outside this conversation, so the value is never typed into
 the chat. The value is read from stdin:
 
 ```bash
-uvx keygrant==0.1.8 set STRIPE_KEY --desc "stripe, test mode"
+uvx keygrant==0.1.9 set STRIPE_KEY --desc "stripe, test mode"
 ```
 
 They paste the value, then press Enter and Ctrl+D (Ctrl+Z then Enter on Windows).
