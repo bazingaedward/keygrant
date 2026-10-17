@@ -18,6 +18,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         python: ["3.10", "3.13"]
+        locale: [""]
         include:
           # Chinese-Windows-style console: preferred encoding GBK, not UTF-8.
           # (windows-latest itself runs with cp1252, also not UTF-8.)
