@@ -82,7 +82,8 @@ Values live in the login Keychain; approval is a native dialog.
 - *Grant riding* — reusing an approval for something the user never saw.
   A grant covers one exact command string in one agent session, expires
   after 15 minutes, and lives only in the MCP server's memory — there is no
-  grants file to forge. The CLI never reuses a grant.
+  grants file to forge. A wider session grant exists only when the user
+  explicitly picks "Allow 30 min". The CLI never reuses a grant.
 - *Silent use* — every new command requires explicit user approval; the
   dialog shows the full command (over-long commands are refused, not
   truncated); timeout means deny.
@@ -107,7 +108,12 @@ Every use of a secret — via the CLI or the MCP server — requires the user's
 approval through a native, topmost dialog that shows the full command (deny
 by default on a 60s timeout). Through the MCP server, approving lets **that
 exact command** reuse the secret for **15 minutes** in that session — handy
-for retries — while any other command prompts again. Grants are held in the
+for retries — while any other command prompts again. To stop the prompts
+during a burst of work, pick **Allow 30 min** instead: that agent session may
+then use the secrets shown in **any** command for 30 minutes without asking
+(macOS and Linux; Windows dialogs offer per-command approval only). It is an
+explicit opt-in — the default button is still Deny — and while it lasts you are
+no longer reviewing individual commands. Grants are held in the
 server's memory only. The CLI prompts on every `keygrant exec`, so an agent
 cannot bypass MCP approval by shelling out to it. `keygrant revoke NAME|--all`
 voids earlier grants in every running session. The dialog will be replaced by a resident tray

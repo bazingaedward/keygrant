@@ -28,7 +28,9 @@ Commands:
 
 Using a secret requires user approval via a native dialog showing the full
 command. Through the MCP server, approval covers that exact command for 15
-minutes, held in the server's memory only; the CLI prompts on every exec.
+minutes — or, if the user picks "Allow 30 min", any command in that session
+for 30 minutes — held in the server's memory only; the CLI prompts on every
+exec.
 Timeout = deny.
 """
 
@@ -68,6 +70,8 @@ LEGACY_VAULT_DIR = (os.path.join(os.environ["APPDATA"], "keygrant")
 VAULT_PATH = os.path.join(VAULT_DIR, "vault.json")
 REVOCATIONS_PATH = os.path.join(VAULT_DIR, "revocations.json")
 GRANT_TTL_SECONDS = 15 * 60
+SESSION_GRANT_TTL_SECONDS = 30 * 60  # "Allow 30 min": any command
+SESSION_BUTTON = f"Allow {SESSION_GRANT_TTL_SECONDS // 60} min"
 MAX_COMMAND_CHARS = 2000  # longer commands can't be reviewed in a dialog
 KEYCHAIN_SERVICE = "keygrant"
 
@@ -362,29 +366,37 @@ def redact_output(data: bytes | None, secrets: dict[str, str]) -> str:
 # ---------- approval ----------
 #
 # A grant authorises one exact command string to use the secrets shown in the
-# dialog. Grants live only in the memory of a GrantStore (one per MCP server
+# dialog. A session grant ("Allow 30 min", an explicit opt-in in the dialog)
+# instead authorises any command in that session to use those secrets.
+# Grants live only in the memory of a GrantStore (one per MCP server
 # process = one agent session), so there is no file an agent could forge. The
 # CLI passes no store and therefore prompts on every exec.
 
 class GrantStore:
-    """In-memory grants for one agent session: (command, name) -> issued_at."""
+    """In-memory grants for one agent session: (command, name) -> issued_at,
+    plus session-wide grants: name -> issued_at."""
 
     def __init__(self) -> None:
         self._issued: dict[tuple[str, str], float] = {}
+        self._session: dict[str, float] = {}
 
     def covers(self, name: str, command: str, revocations: dict) -> bool:
-        issued = self._issued.get((command, name))
-        if issued is None:
-            return False
-        if time.time() >= issued + GRANT_TTL_SECONDS:
-            return False
         revoked = max(revocations.get(name, 0), revocations.get("*", 0))
-        return issued > revoked
+        now = time.time()
+        issued = self._issued.get((command, name))
+        if issued is not None and revoked < issued and now < issued + GRANT_TTL_SECONDS:
+            return True
+        issued = self._session.get(name)
+        return (issued is not None and revoked < issued
+                and now < issued + SESSION_GRANT_TTL_SECONDS)
 
-    def add(self, names: list[str], command: str) -> None:
+    def add(self, names: list[str], command: str, session: bool = False) -> None:
         now = time.time()
         for name in names:
-            self._issued[(command, name)] = now
+            if session:
+                self._session[name] = now
+            else:
+                self._issued[(command, name)] = now
 
 
 def load_revocations() -> dict:
@@ -411,13 +423,20 @@ def save_revocations(revocations: dict) -> None:
     os.replace(tmp, REVOCATIONS_PATH)
 
 
-def _dialog_text(names: list[str], command: str) -> str:
-    return (
+def _dialog_text(names: list[str], command: str, offer_session: bool = False) -> str:
+    text = (
         "An AI agent requests access to secret(s):\n\n"
         + "\n".join(f"    {n}" for n in names)
         + f"\n\nCommand:\n    {command}\n\n"
         + f"Allow this exact command for {GRANT_TTL_SECONDS // 60} minutes?"
     )
+    if offer_session:
+        text += (
+            f"\n\n\"{SESSION_BUTTON}\" lets this agent session use these "
+            f"secrets in ANY command for {SESSION_GRANT_TTL_SECONDS // 60} "
+            "minutes, without asking again."
+        )
+    return text
 
 
 def _approval_dialog_win(text: str, timeout_ms: int) -> str:
@@ -438,31 +457,37 @@ def _approval_dialog_win(text: str, timeout_ms: int) -> str:
     return "deny" if result == IDNO else "timeout"
 
 
-def _approval_dialog_mac(text: str, timeout_ms: int) -> str:
+def _approval_dialog_mac(text: str, timeout_ms: int, offer_session: bool) -> str:
     timeout_s = max(1, timeout_ms // 1000)
     body = json.dumps(text, ensure_ascii=False)
+    buttons = '"Deny", "Allow"'
+    if offer_session:
+        buttons = f'"Deny", "{SESSION_BUTTON}", "Allow"'
     script = (
         f"display dialog {body} with title \"keygrant\" "
-        f"buttons {{\"Deny\", \"Allow\"}} default button \"Deny\" "
+        f"buttons {{{buttons}}} default button \"Deny\" "
         f"cancel button \"Deny\" with icon caution giving up after {timeout_s}"
     )
     proc = subprocess.run(["osascript", "-e", script],
                           capture_output=True, text=True)
     if proc.returncode == 0 and "gave up:true" in proc.stdout:
         return "timeout"
-    if proc.returncode == 0 and "button returned:Allow" in proc.stdout:
+    if proc.returncode == 0 and f"button returned:{SESSION_BUTTON}," in proc.stdout:
+        return "allow_session"
+    if proc.returncode == 0 and "button returned:Allow," in proc.stdout:
         return "allow"
     return "deny"
 
 
-def _approval_dialog_linux(text: str, timeout_ms: int) -> str:
+def _approval_dialog_linux(text: str, timeout_ms: int, offer_session: bool) -> str:
     timeout_s = max(1, timeout_ms // 1000)
+    extra = [f"--extra-button={SESSION_BUTTON}"] if offer_session else []
     try:
         proc = subprocess.run(
             ["zenity", "--question", "--title=keygrant",
              f"--text={text}", "--default-cancel",
              f"--timeout={timeout_s}",
-             "--ok-label=Allow", "--cancel-label=Deny"],
+             "--ok-label=Allow", "--cancel-label=Deny", *extra],
             capture_output=True, text=True,
         )
     except FileNotFoundError:
@@ -470,19 +495,24 @@ def _approval_dialog_linux(text: str, timeout_ms: int) -> str:
         return "timeout"
     if proc.returncode == 0:
         return "allow"
+    if offer_session and proc.returncode == 1 and proc.stdout.strip() == SESSION_BUTTON:
+        return "allow_session"  # zenity reports an extra button as exit 1 + label
     return "timeout" if proc.returncode == 5 else "deny"
 
 
-def _approval_dialog(names: list[str], command: str, timeout_ms: int) -> str:
-    """Native, topmost dialog. Returns 'allow', 'deny' or 'timeout' — an
-    explicit Deny is final, a timeout may escalate to a remote approver."""
-    text = _dialog_text(names, command)
+def _approval_dialog(names: list[str], command: str, timeout_ms: int,
+                     offer_session: bool = False) -> str:
+    """Native, topmost dialog. Returns 'allow', 'allow_session', 'deny' or
+    'timeout' — an explicit Deny is final, a timeout may escalate to a remote
+    approver. The session button is offered only where a GrantStore can hold
+    it; the Windows MessageBox has no custom buttons, so it never offers one."""
     if IS_WIN:
-        return _approval_dialog_win(text, timeout_ms)
+        return _approval_dialog_win(_dialog_text(names, command), timeout_ms)
+    text = _dialog_text(names, command, offer_session)
     if IS_MAC:
-        return _approval_dialog_mac(text, timeout_ms)
+        return _approval_dialog_mac(text, timeout_ms, offer_session)
     if IS_LINUX:
-        return _approval_dialog_linux(text, timeout_ms)
+        return _approval_dialog_linux(text, timeout_ms, offer_session)
     return "timeout"  # no local channel; remote approval or deny
 
 
@@ -533,7 +563,8 @@ def _remote_approval(names: list[str], command: str):
 def request_approval(names: list[str], command: str,
                      store: "GrantStore | None" = None) -> tuple[bool, str]:
     """Return (allowed, denial_reason). Prompts for names the store does not
-    already grant for this exact command; with no store, always prompts."""
+    already grant for this exact command (or session-wide); with no store,
+    always prompts."""
     if len(command) > MAX_COMMAND_CHARS:
         return False, (
             f"command is longer than {MAX_COMMAND_CHARS} characters and cannot "
@@ -548,7 +579,8 @@ def request_approval(names: list[str], command: str,
     if not pending:
         return True, ""
     timeout_ms = int(os.environ.get("KEYGRANT_APPROVAL_TIMEOUT_MS", "60000"))
-    decision = _approval_dialog(pending, command, timeout_ms)
+    decision = _approval_dialog(pending, command, timeout_ms,
+                                offer_session=store is not None)
     if decision == "deny":
         record_event("denied", pending, command)
         return False, f"user denied access to: {', '.join(pending)}"
@@ -565,9 +597,10 @@ def request_approval(names: list[str], command: str,
                 f"(approval dialog timed out{why})"
             )
         # remote allow falls through to grant
-    record_event("grant", pending, command)
+    session = decision == "allow_session" and store is not None
+    record_event("grant_session" if session else "grant", pending, command)
     if store is not None:
-        store.add(pending, command)
+        store.add(pending, command, session=session)
     return True, ""
 
 
