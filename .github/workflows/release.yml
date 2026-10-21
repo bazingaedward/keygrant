@@ -64,16 +64,20 @@ jobs:
     needs: [verify, build]
     runs-on: ubuntu-latest
     environment:
-      name: pypi  # protected: needs the owner's approval; also named in PyPI's trusted publisher
+      name: pypi  # protect it with a required reviewer to gate uploads on approval
       url: https://pypi.org/project/keygrant/${{ needs.verify.outputs.version }}/
-    permissions:
-      id-token: write  # Trusted Publishing (OIDC), no token stored anywhere
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
+      # The PYPI_API_TOKEN repo secret holds a PyPI upload token (same one
+      # keygrant stores locally as UV_PUBLISH_TOKEN). Trusted Publishing (OIDC)
+      # would avoid the stored token, but needs the publisher registered on
+      # pypi.org, which requires a web login (docs/releasing.md).
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
 
   pypi-live:
     needs: [verify, pypi]
