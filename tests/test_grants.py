@@ -147,5 +147,88 @@ class Revocation(GrantTestCase):
         self.assertEqual(self.dialog.call_count, 2)
 
 
+class SessionWideGrants(GrantTestCase):
+    def test_session_grant_covers_other_commands(self):
+        store = keygrant.GrantStore()
+        self.dialog.return_value = "allow_session"
+        self.approve(["K"], "curl api.example", store)
+        ok, _ = self.approve(["K"], "curl other.example", store)
+        self.assertTrue(ok)
+        self.assertEqual(self.dialog.call_count, 1)
+
+    def test_session_grant_covers_only_secrets_shown(self):
+        store = keygrant.GrantStore()
+        self.dialog.return_value = "allow_session"
+        self.approve(["A"], "cmd", store)
+        self.approve(["A", "B"], "other", store)
+        self.assertEqual(self.dialog.call_args[0][0], ["B"])
+
+    def test_session_grant_expires_after_30_minutes(self):
+        store = keygrant.GrantStore()
+        self.dialog.return_value = "allow_session"
+        self.approve(["K"], "cmd", store)
+        self.clock += keygrant.GRANT_TTL_SECONDS + 1
+        self.approve(["K"], "other", store)
+        self.assertEqual(self.dialog.call_count, 1)
+        self.clock = 1_000_000.0 + keygrant.SESSION_GRANT_TTL_SECONDS + 1
+        self.approve(["K"], "other", store)
+        self.assertEqual(self.dialog.call_count, 2)
+
+    def test_session_grant_not_shared_across_sessions(self):
+        self.dialog.return_value = "allow_session"
+        self.approve(["K"], "cmd", keygrant.GrantStore())
+        self.approve(["K"], "cmd", keygrant.GrantStore())
+        self.assertEqual(self.dialog.call_count, 2)
+
+    def test_session_grant_revoked(self):
+        store = keygrant.GrantStore()
+        self.dialog.return_value = "allow_session"
+        self.approve(["K"], "cmd", store)
+        self.clock += 1
+        keygrant.cmd_revoke(["K"])
+        self.clock += 1
+        self.approve(["K"], "other", store)
+        self.assertEqual(self.dialog.call_count, 2)
+
+    def test_offered_only_with_a_store(self):
+        self.approve(["K"], "cmd", keygrant.GrantStore())
+        self.assertTrue(self.dialog.call_args.kwargs["offer_session"])
+        self.approve(["K"], "cmd", None)
+        self.assertFalse(self.dialog.call_args.kwargs["offer_session"])
+
+    def test_cli_never_reuses_session_grant(self):
+        self.dialog.return_value = "allow_session"
+        self.approve(["K"], "cmd", None)
+        self.approve(["K"], "cmd", None)
+        self.assertEqual(self.dialog.call_count, 2)
+
+
+class MacDialogParsing(unittest.TestCase):
+    def run_dialog(self, stdout, offer_session=True):
+        done = mock.Mock(returncode=0, stdout=stdout)
+        with mock.patch.object(keygrant.subprocess, "run", return_value=done) as run:
+            result = keygrant._approval_dialog_mac("text", 60000, offer_session)
+        return result, run.call_args[0][0][2]
+
+    def test_session_button(self):
+        result, script = self.run_dialog(
+            f"button returned:{keygrant.SESSION_BUTTON}, gave up:false\n")
+        self.assertEqual(result, "allow_session")
+        self.assertIn(keygrant.SESSION_BUTTON, script)
+
+    def test_allow_button_is_not_session(self):
+        result, _ = self.run_dialog("button returned:Allow, gave up:false\n")
+        self.assertEqual(result, "allow")
+
+    def test_no_session_button_without_offer(self):
+        _, script = self.run_dialog("button returned:Allow, gave up:false\n",
+                                    offer_session=False)
+        self.assertNotIn(keygrant.SESSION_BUTTON, script)
+
+    def test_timeout(self):
+        result, _ = self.run_dialog("button returned:, gave up:true\n")
+        self.assertEqual(result, "timeout")
+
+
 if __name__ == "__main__":
     unittest.main()

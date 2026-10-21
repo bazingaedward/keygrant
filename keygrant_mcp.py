@@ -57,7 +57,8 @@ TOOLS = [
             "variables (reference them as %NAME% / $env:NAME / $NAME inside the "
             "command). The user must approve access via a native dialog that "
             "shows the full command; approval covers that exact command string "
-            "for 15 minutes, so reuse the identical command for retries. "
+            "for 15 minutes, so reuse the identical command for retries (the "
+            "user may instead allow any command for 30 minutes). "
             "Commands over 2000 characters are refused: put long logic in a "
             "script. A denial is final — never retry it. Output is "
             "returned with any plaintext secret values redacted. This is the "
@@ -165,7 +166,7 @@ def handle(msg: dict):
             "result": {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "keygrant", "version": "0.1.9"},
+                "serverInfo": {"name": "keygrant", "version": "0.1.10"},
             },
         }
     if method == "tools/list":
