@@ -439,22 +439,89 @@ def _dialog_text(names: list[str], command: str, offer_session: bool = False) ->
     return text
 
 
-def _approval_dialog_win(text: str, timeout_ms: int) -> str:
-    MB_YESNO, MB_ICONWARNING = 0x4, 0x30
-    MB_SYSTEMMODAL, MB_SETFOREGROUND, MB_TOPMOST = 0x1000, 0x10000, 0x40000
-    IDYES, IDNO = 6, 7
-    fn = ctypes.windll.user32.MessageBoxTimeoutW
-    fn.argtypes = [wt.HWND, ctypes.c_wchar_p, ctypes.c_wchar_p,
-                   wt.UINT, wt.WORD, wt.DWORD]
-    fn.restype = ctypes.c_int
-    result = fn(
-        None, text, "keygrant — secret access request",
-        MB_YESNO | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST,
-        0, timeout_ms,
-    )
-    if result == IDYES:
-        return "allow"
-    return "deny" if result == IDNO else "timeout"
+_WINDOWS_APPROVAL_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [Text.Encoding]::UTF8
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[Windows.Forms.Application]::EnableVisualStyles()
+$form = New-Object Windows.Forms.Form
+$form.Text = 'keygrant - secret access request'
+$form.ClientSize = New-Object Drawing.Size(680, 440)
+$form.StartPosition = 'CenterScreen'
+$form.TopMost = $true
+$form.MinimizeBox = $false
+$form.MaximizeBox = $false
+$form.FormBorderStyle = 'FixedDialog'
+$form.Tag = 'deny'
+$text = New-Object Windows.Forms.TextBox
+$text.Multiline = $true
+$text.ReadOnly = $true
+$text.ScrollBars = 'Vertical'
+$text.SetBounds(16, 16, 648, 350)
+$text.Text = $payload.text -replace "`n", "`r`n"
+$form.Controls.Add($text)
+$deny = New-Object Windows.Forms.Button
+$deny.Text = 'Deny'
+$deny.SetBounds(16, 388, 120, 32)
+$deny.DialogResult = [Windows.Forms.DialogResult]::Cancel
+$deny.Add_Click({ $form.Tag = 'deny'; $form.Close() })
+$form.Controls.Add($deny)
+$form.AcceptButton = $deny
+$form.CancelButton = $deny
+$allow = New-Object Windows.Forms.Button
+$allow.Text = 'Allow'
+$allow.SetBounds(544, 388, 120, 32)
+$allow.Add_Click({ $form.Tag = 'allow'; $form.Close() })
+$form.Controls.Add($allow)
+if ($payload.offer_session) {
+    $session = New-Object Windows.Forms.Button
+    $session.Text = $payload.session_label
+    $session.SetBounds(372, 388, 156, 32)
+    $session.Add_Click({ $form.Tag = 'allow_session'; $form.Close() })
+    $form.Controls.Add($session)
+}
+$timer = New-Object Windows.Forms.Timer
+$timer.Interval = [Math]::Max(1, [int]$payload.timeout_ms)
+$timer.Add_Tick({ $form.Tag = 'timeout'; $form.Close() })
+$form.Add_Shown({ $deny.Focus(); $timer.Start() })
+try {
+    $null = $form.ShowDialog()
+    [Console]::WriteLine([string]$form.Tag)
+} finally {
+    $timer.Stop()
+    $timer.Dispose()
+    $form.Dispose()
+}
+"""
+
+
+def _approval_dialog_win(text: str, timeout_ms: int, offer_session: bool = False) -> str:
+    # Static code only: names and commands are data on stdin, never interpolated.
+    executable = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                              "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    encoded = base64.b64encode(_WINDOWS_APPROVAL_SCRIPT.encode("utf-16-le")).decode("ascii")
+    payload = json.dumps({"text": text, "timeout_ms": max(1, timeout_ms),
+                          "offer_session": offer_session, "session_label": SESSION_BUTTON})
+    try:
+        proc = subprocess.run(
+            [executable, "-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand", encoded],
+            input=payload, capture_output=True, text=True, encoding="utf-8",
+            timeout=max(1, timeout_ms / 1000) + 15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except OSError:
+        return "deny"
+    if proc.returncode != 0:
+        return "deny"
+    result = proc.stdout.strip()
+    if result == "allow_session":
+        return result if offer_session else "deny"
+    return result if result in ("allow", "deny", "timeout") else "deny"
 
 
 def _approval_dialog_mac(text: str, timeout_ms: int, offer_session: bool) -> str:
@@ -505,9 +572,10 @@ def _approval_dialog(names: list[str], command: str, timeout_ms: int,
     """Native, topmost dialog. Returns 'allow', 'allow_session', 'deny' or
     'timeout' — an explicit Deny is final, a timeout may escalate to a remote
     approver. The session button is offered only where a GrantStore can hold
-    it; the Windows MessageBox has no custom buttons, so it never offers one."""
+    it; CLI callers never offer a session grant."""
     if IS_WIN:
-        return _approval_dialog_win(_dialog_text(names, command), timeout_ms)
+        return _approval_dialog_win(_dialog_text(names, command, offer_session),
+                                    timeout_ms, offer_session)
     text = _dialog_text(names, command, offer_session)
     if IS_MAC:
         return _approval_dialog_mac(text, timeout_ms, offer_session)

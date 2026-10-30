@@ -204,3 +204,10 @@ Design and threat model: [`docs/design/cloud-sync-client.md`](docs/design/cloud-
 1. Resident tray app (replaces the modal dialog; approval history, revoke UI)
 2. Per-secret egress allowlists (bind a key to permitted destination hosts)
 3. Optional cloud sync for teams (zero-knowledge: server stores ciphertext only)
+
+### Windows session approval
+
+The Windows approval dialog supports **Allow 30 min** for MCP calls. It covers
+only the displayed secrets in that MCP server process. Deny is the default;
+Esc and window close deny access. CLI calls still require individual approval.
+Restart an existing MCP connection after installing this local update.

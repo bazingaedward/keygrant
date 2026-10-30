@@ -32,10 +32,13 @@ What stays the same:
   approval, which only ever issues a per-command grant).
 - Audit events record a session approval as `grant_session`.
 
-Platforms: macOS (`osascript`, 3 buttons) and Linux (zenity
-`--extra-button`). The Windows MessageBox has no custom buttons, and mapping
-the session grant to Cancel would make Esc grant access, so Windows keeps
-per-command approval only.
+Platforms: macOS (`osascript`, 3 buttons), Linux (zenity `--extra-button`),
+and Windows (Windows PowerShell / WinForms with three explicit buttons).
+Windows defaults to Deny; Esc and closing the window deny access. A timer
+closes the window on timeout. CLI calls omit the session button. Names and
+commands are JSON on stdin to a static encoded script, never executable
+PowerShell source. A launch failure, nonzero exit or unexpected output denies
+access; a timeout retains the existing remote-approval fallback.
 
 ## Trade-off
 
